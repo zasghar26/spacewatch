@@ -1401,10 +1401,12 @@ async def startup_scheduler():
     logger.info(f"Metrics tracking enabled - tracking last {MAX_LATENCY_SAMPLES} requests")
     
     # Scheduler disabled in multi-tenant mode (no global credentials)
-    if ENABLE_SCHEDULER:
-        logger.warning("Scheduler is enabled but cannot run in multi-tenant mode (no global credentials). Set ENABLE_SCHEDULER=false to suppress this warning.")
-        # The scheduler would need per-tenant credentials to work, which we don't have globally
+    if not ENABLE_SCHEDULER:
+        logger.info("Scheduler disabled (ENABLE_SCHEDULER=false). Snapshots will be triggered client-side.")
         return
+    
+    logger.warning("Scheduler is enabled but cannot run properly in multi-tenant mode (no global credentials). Consider using client-side snapshots instead.")
+    # The scheduler would need per-tenant credentials to work, which we don't have globally
 
     async def loop():
         while True:
