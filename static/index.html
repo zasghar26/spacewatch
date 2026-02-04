@@ -1368,6 +1368,40 @@ Examples:
     hideAlert();
   }
 
+  // =========================
+  // Automatic Snapshot Triggering
+  // =========================
+  async function triggerSnapshotAll() {
+    console.log("Triggering snapshots for all buckets...");
+    
+    // Only trigger if we have required configuration
+    if (!CONFIG.logBucket || !CONFIG.metricsBucket) {
+      console.log("Skipping snapshot: log_bucket or metrics_bucket not configured");
+      return;
+    }
+    
+    try {
+      const r = await fetch(`${BASE_URL}/trigger-snapshot-all`, {
+        method: "POST",
+        headers: headersBase()
+      });
+      
+      if (r.ok) {
+        const data = await r.json();
+        console.log(`Snapshots completed: ${data.snapshots_created} created, ${data.snapshots_failed} failed`);
+        
+        // Refresh metrics after snapshots are created
+        if (data.snapshots_created > 0) {
+          await refreshMetrics();
+        }
+      } else {
+        console.warn("Snapshot trigger failed:", await r.text());
+      }
+    } catch (e) {
+      console.error("Error triggering snapshots:", e);
+    }
+  }
+
   async function refreshMetrics() {
     refreshBtn.disabled = true;
     const b = bucketSel.value;
@@ -1622,6 +1656,22 @@ Examples:
       await loadBuckets();
       await refreshMetrics();
       await refreshStorageHealth(); // Load storage health metrics on start
+      
+      // Trigger initial snapshot on startup (only if configured)
+      if (CONFIG.logBucket && CONFIG.metricsBucket) {
+        console.log("Triggering initial snapshots...");
+        // Don't await - let it run in background
+        triggerSnapshotAll().catch(err => console.error("Initial snapshot error:", err));
+        
+        // Set up 5-minute interval for automatic snapshots
+        console.log("Setting up 5-minute snapshot interval");
+        setInterval(() => {
+          console.log("Running scheduled snapshot...");
+          triggerSnapshotAll().catch(err => console.error("Scheduled snapshot error:", err));
+        }, 5 * 60 * 1000); // 5 minutes in milliseconds
+      } else {
+        console.log("Automatic snapshots disabled: log_bucket or metrics_bucket not configured");
+      }
       
       // Auto-refresh storage health every 30 seconds
       setInterval(refreshStorageHealth, 30000);

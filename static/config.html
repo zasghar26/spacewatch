@@ -406,7 +406,7 @@
     }
 
     // Form submission handler
-    document.getElementById('configForm').addEventListener('submit', function(e) {
+    document.getElementById('configForm').addEventListener('submit', async function(e) {
       e.preventDefault();
 
       // Clear previous errors
@@ -446,16 +446,82 @@
         return;
       }
 
-      // Save configuration to sessionStorage
-      Object.keys(config).forEach(key => {
-        sessionStorage.setItem(`spacewatch_${key}`, config[key]);
-      });
+      // Disable submit button and show loading state
+      const submitBtn = document.getElementById('submitBtn');
+      const originalBtnText = submitBtn.textContent;
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Validating credentials...';
 
-      // Mark as configured
-      sessionStorage.setItem('spacewatch_configured', 'true');
+      try {
+        // Validate credentials
+        const headers = {
+          'X-Spaces-Key': config.spacesKey,
+          'X-Spaces-Secret': config.spacesSecret,
+        };
+        if (config.spacesRegion) headers['X-Region'] = config.spacesRegion;
+        if (config.spacesEndpoint) headers['X-Endpoint'] = config.spacesEndpoint;
+        if (config.logBucket) headers['X-Log-Bucket'] = config.logBucket;
+        if (config.metricsBucket) headers['X-Metrics-Bucket'] = config.metricsBucket;
 
-      // Redirect to main application dashboard
-      window.location.href = '/dashboard';
+        const validateResponse = await fetch('/validate-credentials', {
+          method: 'POST',
+          headers: headers
+        });
+
+        if (!validateResponse.ok) {
+          const errorText = await validateResponse.text();
+          throw new Error(`Credential validation failed: ${errorText}`);
+        }
+
+        const validationData = await validateResponse.json();
+        console.log('Credentials validated:', validationData);
+
+        // Trigger initial snapshots if log_bucket and metrics_bucket are provided
+        if (config.logBucket && config.metricsBucket) {
+          submitBtn.textContent = 'Creating initial metrics snapshots...';
+          
+          const snapshotHeaders = {
+            ...headers,
+            'X-Log-Prefix': config.logPrefix,
+            'X-Metrics-Prefix': config.metricsPrefix
+          };
+
+          const snapshotResponse = await fetch('/trigger-snapshot-all', {
+            method: 'POST',
+            headers: snapshotHeaders
+          });
+
+          if (snapshotResponse.ok) {
+            const snapshotData = await snapshotResponse.json();
+            console.log('Initial snapshots created:', snapshotData);
+          } else {
+            console.warn('Snapshot creation failed, but continuing:', await snapshotResponse.text());
+          }
+        }
+
+        // Save configuration to sessionStorage
+        Object.keys(config).forEach(key => {
+          sessionStorage.setItem(`spacewatch_${key}`, config[key]);
+        });
+
+        // Mark as configured
+        sessionStorage.setItem('spacewatch_configured', 'true');
+
+        // Redirect to main application dashboard
+        submitBtn.textContent = 'Success! Redirecting...';
+        window.location.href = '/dashboard';
+
+      } catch (error) {
+        console.error('Configuration error:', error);
+        submitBtn.disabled = false;
+        submitBtn.textContent = originalBtnText;
+        
+        // Show error in a general location
+        const infoBox = document.querySelector('.info-box');
+        infoBox.innerHTML = `<strong style="color: var(--danger);">Error:</strong> ${error.message}`;
+        infoBox.style.background = 'var(--dangerBg)';
+        infoBox.style.borderColor = 'var(--danger)';
+      }
     });
 
     function showError(elementId, message) {
