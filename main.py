@@ -2215,9 +2215,9 @@ def trigger_snapshot_all(
                 source_bucket=bucket,
                 source_prefix="",
                 log_bucket=log_bucket,
-                log_prefix=log_prefix or "",
+                log_prefix=log_prefix if log_prefix else "",
                 metrics_bucket=metrics_bucket,
-                metrics_prefix=metrics_prefix or "spacewatch-metrics/"
+                metrics_prefix=metrics_prefix if metrics_prefix else "spacewatch-metrics/"
             )
             results.append({
                 "bucket": bucket,

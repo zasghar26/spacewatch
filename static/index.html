@@ -1650,6 +1650,10 @@ Examples:
     refreshHealthBtn.addEventListener("click", refreshStorageHealth);
   }
 
+  // Store interval IDs for cleanup
+  let snapshotIntervalId = null;
+  let healthIntervalId = null;
+
   // bootstrap
   (async () => {
     try {
@@ -1665,7 +1669,7 @@ Examples:
         
         // Set up 5-minute interval for automatic snapshots
         console.log("Setting up 5-minute snapshot interval");
-        setInterval(() => {
+        snapshotIntervalId = setInterval(() => {
           console.log("Running scheduled snapshot...");
           triggerSnapshotAll().catch(err => console.error("Scheduled snapshot error:", err));
         }, 5 * 60 * 1000); // 5 minutes in milliseconds
@@ -1674,7 +1678,7 @@ Examples:
       }
       
       // Auto-refresh storage health every 30 seconds
-      setInterval(refreshStorageHealth, 30000);
+      healthIntervalId = setInterval(refreshStorageHealth, 30000);
     } catch (e) {
       setStatus("err", String(e.message || e));
     }

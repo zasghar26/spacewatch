@@ -516,11 +516,12 @@
         submitBtn.disabled = false;
         submitBtn.textContent = originalBtnText;
         
-        // Show error in a general location
+        // Show error in a general location (use textContent to prevent XSS)
         const infoBox = document.querySelector('.info-box');
-        infoBox.innerHTML = `<strong style="color: var(--danger);">Error:</strong> ${error.message}`;
+        infoBox.textContent = `Error: ${error.message}`;
         infoBox.style.background = 'var(--dangerBg)';
         infoBox.style.borderColor = 'var(--danger)';
+        infoBox.style.color = 'var(--danger)';
       }
     });
 
