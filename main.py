@@ -915,7 +915,7 @@ def run_metrics_snapshot(s3_client, source_bucket: str, credential_cache_key: st
     ts = datetime.now(timezone.utc)
     logs_prefix = normalize_prefix(log_prefix)
 
-    src_summary = storage_summary(s3_client, bucket=source_bucket, prefix=source_prefix, log_bucket=log_bucket, metrics_bucket=metrics_bucket)
+    src_summary = storage_summary(s3_client, bucket=source_bucket, credential_cache_key=credential_cache_key, prefix=source_prefix, log_bucket=log_bucket, metrics_bucket=metrics_bucket)
 
     objs = list_objects(s3_client, log_bucket, credential_cache_key, prefix=logs_prefix, log_bucket=log_bucket, metrics_bucket=metrics_bucket)
     src = source_bucket.lower().strip()
