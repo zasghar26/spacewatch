@@ -2272,8 +2272,10 @@ def validate_credentials(
     
     try:
         s3_client = create_s3_client(spaces_key, spaces_secret, region, endpoint)
+        # Generate credential cache key for this credential set
+        credential_cache_key = get_credential_cache_key(spaces_key, region, endpoint)
         # Try to list buckets to validate credentials
-        buckets = refresh_bucket_cache(s3_client, force=True, log_bucket=log_bucket, metrics_bucket=metrics_bucket)
+        buckets = refresh_bucket_cache(s3_client, credential_cache_key, force=True, log_bucket=log_bucket, metrics_bucket=metrics_bucket)
         
         return {
             "valid": True,
@@ -2308,9 +2310,11 @@ def trigger_snapshot_all(
         raise HTTPException(status_code=400, detail="X-Metrics-Bucket header required")
     
     s3_client = create_s3_client(spaces_key, spaces_secret, region, endpoint)
+    # Generate credential cache key for this credential set
+    credential_cache_key = get_credential_cache_key(spaces_key, region, endpoint)
     
     # Get all buckets
-    buckets = refresh_bucket_cache(s3_client, force=True, log_bucket=log_bucket, metrics_bucket=metrics_bucket)
+    buckets = refresh_bucket_cache(s3_client, credential_cache_key, force=True, log_bucket=log_bucket, metrics_bucket=metrics_bucket)
     
     results = []
     errors = []
