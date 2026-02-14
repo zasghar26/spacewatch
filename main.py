@@ -482,9 +482,10 @@ def get_storage_metrics() -> Dict[str, Any]:
     }
 
 # ============================================================
-# TOP IPs IMAGE CACHE (performance)
+# TOP IPs IMAGE CACHE (per-credential cached for BYOC safety)
 # ============================================================
-TOP_IPS_CACHE = {}   # (bucket, date, limit) -> (timestamp, png_bytes)
+# Structure: { (credential_cache_key, bucket, date, limit): (timestamp, png_bytes) }
+TOP_IPS_CACHE: Dict[Tuple[str, str, str, int], Tuple[float, bytes]] = {}
 TOP_IPS_TTL = 120    # seconds
 
 def client_ip(request: Request) -> str:
@@ -1966,7 +1967,7 @@ def health():
         "spaces_endpoint": DEFAULT_SPACES_ENDPOINT,
         "spaces_region": DEFAULT_SPACES_REGION,
         "api_key_protection": bool(APP_API_KEY),
-        "bucket_cache_last_error": _BUCKET_CACHE_LAST_ERROR,
+        "bucket_cache_credentials_count": len(_BUCKET_CACHE_BY_CREDENTIAL),
         "fallback_buckets_enabled": bool(FALLBACK_BUCKETS),
         "agent": {"max_steps": AGENT_MAX_STEPS, "max_tool_bytes": AGENT_MAX_TOOL_BYTES},
         "scheduler": {"enabled": ENABLE_SCHEDULER, "every_sec": SNAPSHOT_EVERY_SEC},
@@ -2190,10 +2191,13 @@ def plot_top_ips_png(
     if not log_bucket:
         raise HTTPException(status_code=400, detail="X-Log-Bucket header required")
     
+    s3_client = create_s3_client(spaces_key, spaces_secret, region, endpoint)
+    credential_cache_key = get_credential_cache_key(spaces_key, region, endpoint)
+    
     # -------------------------
-    # CACHE CHECK
+    # CACHE CHECK (per-credential for BYOC safety)
     # -------------------------
-    cache_key = (source_bucket, date_yyyy_mm_dd or "", int(limit))
+    cache_key = (credential_cache_key, source_bucket, date_yyyy_mm_dd or "", int(limit))
     now = time.time()
     cached = TOP_IPS_CACHE.get(cache_key)
     if cached and (now - cached[0]) < TOP_IPS_TTL:
@@ -2201,9 +2205,6 @@ def plot_top_ips_png(
             content=cached[1],
             media_type="image/png"
         )
-
-    s3_client = create_s3_client(spaces_key, spaces_secret, region, endpoint)
-    credential_cache_key = get_credential_cache_key(spaces_key, region, endpoint)
     
     # Use log search and count IPs
     res = search_access_logs(
@@ -2230,7 +2231,7 @@ def plot_top_ips_png(
         fig.savefig(buf, format="png", dpi=140, bbox_inches="tight")
         plt.close(fig)
         png_bytes = buf.getvalue()
-        TOP_IPS_CACHE[cache_key] = (now, png_bytes)
+        TOP_IPS_CACHE[cache_key] = (now, png_bytes)  # Per-credential cache
     
         return Response(content=png_bytes, media_type="image/png")
 
@@ -2249,7 +2250,7 @@ def plot_top_ips_png(
     plt.close(fig)
     
     png_bytes = buf.getvalue()
-    TOP_IPS_CACHE[cache_key] = (now, png_bytes)
+    TOP_IPS_CACHE[cache_key] = (now, png_bytes)  # Per-credential cache
     return Response(content=png_bytes, media_type="image/png")
 
 @app.post("/validate-credentials")
