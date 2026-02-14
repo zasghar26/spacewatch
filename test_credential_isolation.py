@@ -46,11 +46,17 @@ class TestCredentialCacheKey:
         assert key1 != key2
     
     def test_cache_key_is_stable_hash(self):
-        """Cache key should be a stable 16-character hash."""
-        key = get_credential_cache_key("test_key", "sgp1", "https://sgp1.digitaloceanspaces.com")
-        assert isinstance(key, str)
-        assert len(key) == 16
-        assert all(c in '0123456789abcdef' for c in key)
+        """Cache key should be a stable 16-character hash that's consistent across calls."""
+        key1 = get_credential_cache_key("test_key", "sgp1", "https://sgp1.digitaloceanspaces.com")
+        key2 = get_credential_cache_key("test_key", "sgp1", "https://sgp1.digitaloceanspaces.com")
+        
+        # Verify both calls produce identical results (stability)
+        assert key1 == key2
+        
+        # Verify format
+        assert isinstance(key1, str)
+        assert len(key1) == 16
+        assert all(c in '0123456789abcdef' for c in key1)
 
 
 class TestBucketCacheIsolation:

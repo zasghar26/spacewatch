@@ -2231,7 +2231,7 @@ def plot_top_ips_png(
         fig.savefig(buf, format="png", dpi=140, bbox_inches="tight")
         plt.close(fig)
         png_bytes = buf.getvalue()
-        TOP_IPS_CACHE[cache_key] = (now, png_bytes)  # Per-credential cache
+        TOP_IPS_CACHE[cache_key] = (now, png_bytes)
     
         return Response(content=png_bytes, media_type="image/png")
 
@@ -2250,7 +2250,7 @@ def plot_top_ips_png(
     plt.close(fig)
     
     png_bytes = buf.getvalue()
-    TOP_IPS_CACHE[cache_key] = (now, png_bytes)  # Per-credential cache
+    TOP_IPS_CACHE[cache_key] = (now, png_bytes)
     return Response(content=png_bytes, media_type="image/png")
 
 @app.post("/validate-credentials")
