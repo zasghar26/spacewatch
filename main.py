@@ -1217,7 +1217,8 @@ def tool_buckets(
     STATS["tool_requests"] += 1
 
     s3_client = create_s3_client(spaces_key, spaces_secret, region, endpoint)
-    buckets = sorted(list(refresh_bucket_cache(s3_client, force=True, log_bucket=log_bucket, metrics_bucket=metrics_bucket)))
+    credential_cache_key = get_credential_cache_key(spaces_key, region, endpoint)
+    buckets = sorted(list(refresh_bucket_cache(s3_client, credential_cache_key, force=True, log_bucket=log_bucket, metrics_bucket=metrics_bucket)))
     if not buckets:
         raise HTTPException(
             status_code=403,
@@ -2271,8 +2272,9 @@ def validate_credentials(
     
     try:
         s3_client = create_s3_client(spaces_key, spaces_secret, region, endpoint)
+        credential_cache_key = get_credential_cache_key(spaces_key, region, endpoint)
         # Try to list buckets to validate credentials
-        buckets = refresh_bucket_cache(s3_client, force=True, log_bucket=log_bucket, metrics_bucket=metrics_bucket)
+        buckets = refresh_bucket_cache(s3_client, credential_cache_key, force=True, log_bucket=log_bucket, metrics_bucket=metrics_bucket)
         
         return {
             "valid": True,
