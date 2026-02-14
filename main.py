@@ -1401,10 +1401,12 @@ async def startup_scheduler():
     logger.info(f"Metrics tracking enabled - tracking last {MAX_LATENCY_SAMPLES} requests")
     
     # Scheduler disabled in multi-tenant mode (no global credentials)
-    if ENABLE_SCHEDULER:
-        logger.warning("Scheduler is enabled but cannot run in multi-tenant mode (no global credentials). Set ENABLE_SCHEDULER=false to suppress this warning.")
-        # The scheduler would need per-tenant credentials to work, which we don't have globally
+    if not ENABLE_SCHEDULER:
+        logger.info("Scheduler disabled (ENABLE_SCHEDULER=false). Snapshots will be triggered client-side.")
         return
+    
+    logger.warning("Scheduler is enabled but cannot run properly in multi-tenant mode (no global credentials). Consider using client-side snapshots instead.")
+    # The scheduler would need per-tenant credentials to work, which we don't have globally
 
     async def loop():
         while True:
@@ -2134,3 +2136,105 @@ def plot_top_ips_png(
     png_bytes = buf.getvalue()
     TOP_IPS_CACHE[cache_key] = (now, png_bytes)
     return Response(content=png_bytes, media_type="image/png")
+
+@app.post("/validate-credentials")
+def validate_credentials(
+    spaces_key: str = Header(..., alias="X-Spaces-Key"),
+    spaces_secret: str = Header(..., alias="X-Spaces-Secret"),
+    region: Optional[str] = Header(None, alias="X-Region"),
+    endpoint: Optional[str] = Header(None, alias="X-Endpoint"),
+    log_bucket: Optional[str] = Header(None, alias="X-Log-Bucket"),
+    metrics_bucket: Optional[str] = Header(None, alias="X-Metrics-Bucket"),
+    x_api_key: Optional[str] = Header(None),
+):
+    """
+    Validate Spaces credentials by attempting to list buckets.
+    Returns success if credentials are valid.
+    """
+    require_api_key(x_api_key)
+    
+    try:
+        s3_client = create_s3_client(spaces_key, spaces_secret, region, endpoint)
+        # Try to list buckets to validate credentials
+        buckets = refresh_bucket_cache(s3_client, force=True, log_bucket=log_bucket, metrics_bucket=metrics_bucket)
+        
+        return {
+            "valid": True,
+            "bucket_count": len(buckets),
+            "buckets": sorted(list(buckets))
+        }
+    except Exception as e:
+        logger.error(f"Credential validation failed: {e}")
+        raise HTTPException(status_code=401, detail=f"Invalid credentials: {str(e)}")
+
+@app.post("/trigger-snapshot-all")
+def trigger_snapshot_all(
+    spaces_key: str = Header(..., alias="X-Spaces-Key"),
+    spaces_secret: str = Header(..., alias="X-Spaces-Secret"),
+    region: Optional[str] = Header(None, alias="X-Region"),
+    endpoint: Optional[str] = Header(None, alias="X-Endpoint"),
+    log_bucket: Optional[str] = Header(None, alias="X-Log-Bucket"),
+    log_prefix: Optional[str] = Header(None, alias="X-Log-Prefix"),
+    metrics_bucket: Optional[str] = Header(None, alias="X-Metrics-Bucket"),
+    metrics_prefix: Optional[str] = Header(None, alias="X-Metrics-Prefix"),
+    x_api_key: Optional[str] = Header(None),
+):
+    """
+    Trigger metrics snapshots for all discovered buckets.
+    This is called automatically after credential validation.
+    """
+    require_api_key(x_api_key)
+    
+    if not log_bucket:
+        raise HTTPException(status_code=400, detail="X-Log-Bucket header required")
+    if not metrics_bucket:
+        raise HTTPException(status_code=400, detail="X-Metrics-Bucket header required")
+    
+    s3_client = create_s3_client(spaces_key, spaces_secret, region, endpoint)
+    
+    # Get all buckets
+    buckets = refresh_bucket_cache(s3_client, force=True, log_bucket=log_bucket, metrics_bucket=metrics_bucket)
+    
+    results = []
+    errors = []
+    
+    # Skip log and metrics buckets
+    skip_buckets = set()
+    if log_bucket:
+        skip_buckets.add(log_bucket)
+    if metrics_bucket:
+        skip_buckets.add(metrics_bucket)
+    
+    for bucket in buckets:
+        if bucket in skip_buckets:
+            continue
+        
+        try:
+            result = run_metrics_snapshot(
+                s3_client,
+                source_bucket=bucket,
+                source_prefix="",
+                log_bucket=log_bucket,
+                log_prefix=log_prefix if log_prefix else "",
+                metrics_bucket=metrics_bucket,
+                metrics_prefix=metrics_prefix if metrics_prefix else "spacewatch-metrics/"
+            )
+            results.append({
+                "bucket": bucket,
+                "status": "success",
+                "metrics_key": result.get("metrics_key")
+            })
+        except Exception as e:
+            logger.error(f"Snapshot failed for bucket {bucket}: {e}")
+            errors.append({
+                "bucket": bucket,
+                "status": "error",
+                "error": str(e)
+            })
+    
+    return {
+        "snapshots_created": len(results),
+        "snapshots_failed": len(errors),
+        "results": results,
+        "errors": errors
+    }
