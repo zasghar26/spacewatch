@@ -37,6 +37,7 @@ import sys
 import time
 import traceback
 import asyncio
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any, Tuple, Set, Callable
@@ -168,6 +169,27 @@ def create_s3_client(access_key: str, secret_key: str, region: Optional[str] = N
         aws_secret_access_key=secret_key,
         config=Config(signature_version="s3v4"),
     )
+
+
+def get_credential_cache_key(access_key: str, region: Optional[str] = None, endpoint: Optional[str] = None) -> str:
+    """
+    Generate a stable cache key for credential-scoped caching in BYOC scenarios.
+    
+    Hash the tuple (access_key_id, endpoint_url, region) to create a unique identifier
+    for each set of credentials. This ensures that caches (buckets, IPs, metrics) are
+    isolated per credential set, preventing cross-user data leakage.
+    
+    Note: We do NOT include the secret key in the cache key for security reasons.
+    The access key alone is sufficient to identify unique credential sets.
+    """
+    region = region or DEFAULT_SPACES_REGION
+    endpoint = endpoint or DEFAULT_SPACES_ENDPOINT
+    
+    # Create a stable string representation of the credential tuple
+    credential_tuple = f"{access_key}:{endpoint}:{region}"
+    
+    # Hash it to create a stable, privacy-preserving cache key
+    return hashlib.sha256(credential_tuple.encode()).hexdigest()[:16]
 
 
 # ============================================================
@@ -468,10 +490,21 @@ TOP_IPS_TTL = 120    # seconds
 def client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
-def memory_key(request: Request, x_session_id: Optional[str]) -> str:
+def memory_key(request: Request, x_session_id: Optional[str], credential_cache_key: str) -> str:
+    """
+    Generate a memory key for session/IP tracking that includes credential isolation.
+    
+    In BYOC scenarios, we must ensure different credentials don't share memory state,
+    even if they're from the same IP or session. This prevents cross-user data leakage.
+    """
+    base_key = ""
     if x_session_id and x_session_id.strip():
-        return f"sess:{x_session_id.strip()}"
-    return f"ip:{client_ip(request)}"
+        base_key = f"sess:{x_session_id.strip()}"
+    else:
+        base_key = f"ip:{client_ip(request)}"
+    
+    # Include credential cache key to isolate memory by credentials
+    return f"{base_key}:cred:{credential_cache_key}"
 
 def rate_limit(ip: str):
     now = time.time()
@@ -510,11 +543,10 @@ def require_api_key(x_api_key: Optional[str]):
 
 
 # ============================================================
-# BUCKET DISCOVERY (cached)
+# BUCKET DISCOVERY (per-credential cached for BYOC safety)
 # ============================================================
-_BUCKET_CACHE: Set[str] = set()
-_BUCKET_CACHE_TS: float = 0.0
-_BUCKET_CACHE_LAST_ERROR: Optional[str] = None
+# Structure: { credential_cache_key: (timestamp, bucket_set, last_error) }
+_BUCKET_CACHE_BY_CREDENTIAL: Dict[str, Tuple[float, Set[str], Optional[str]]] = {}
 
 def _seed_known_buckets(log_bucket: Optional[str] = None, metrics_bucket: Optional[str] = None) -> Set[str]:
     """
@@ -533,39 +565,68 @@ def _seed_known_buckets(log_bucket: Optional[str] = None, metrics_bucket: Option
     return buckets
 
 
-def refresh_bucket_cache(s3_client, force: bool = False, log_bucket: Optional[str] = None, metrics_bucket: Optional[str] = None) -> Set[str]:
-    global _BUCKET_CACHE, _BUCKET_CACHE_TS, _BUCKET_CACHE_LAST_ERROR
+def refresh_bucket_cache(
+    s3_client, 
+    credential_cache_key: str,
+    force: bool = False, 
+    log_bucket: Optional[str] = None, 
+    metrics_bucket: Optional[str] = None
+) -> Set[str]:
+    """
+    Refresh bucket cache for a specific credential set (BYOC-safe).
+    
+    Each credential gets its own cache entry to prevent cross-user bucket leakage.
+    The credential_cache_key should be generated using get_credential_cache_key().
+    """
     now = time.time()
-    if not force and _BUCKET_CACHE and (now - _BUCKET_CACHE_TS) < BUCKET_CACHE_TTL_SEC:
-        return _BUCKET_CACHE
+    
+    # Check if we have a valid cached entry for this credential
+    cached_entry = _BUCKET_CACHE_BY_CREDENTIAL.get(credential_cache_key)
+    if not force and cached_entry:
+        cache_ts, cached_buckets, _ = cached_entry
+        if cached_buckets and (now - cache_ts) < BUCKET_CACHE_TTL_SEC:
+            return cached_buckets
 
     STATS["bucket_cache_refreshes"] += 1
-    _BUCKET_CACHE_LAST_ERROR = None
+    last_error = None
+    
     try:
         resp = s3_client.list_buckets()
         buckets = {b["Name"] for b in resp.get("Buckets", []) if b.get("Name")}
         if not buckets:
             buckets = _seed_known_buckets(log_bucket, metrics_bucket)
-        _BUCKET_CACHE = buckets
-        _BUCKET_CACHE_TS = now
-        return _BUCKET_CACHE
+        _BUCKET_CACHE_BY_CREDENTIAL[credential_cache_key] = (now, buckets, None)
+        return buckets
     except ClientError as e:
-        _BUCKET_CACHE_LAST_ERROR = f"{e}"
+        last_error = f"{e}"
     except Exception as e:
-        _BUCKET_CACHE_LAST_ERROR = str(e)
+        last_error = str(e)
 
     # If list_buckets is disallowed, fall back to explicitly configured buckets
     # so require_bucket_allowed() will still work for scoped keys.
-    _BUCKET_CACHE = _seed_known_buckets(log_bucket, metrics_bucket)
-    _BUCKET_CACHE_TS = now
-    return _BUCKET_CACHE
+    buckets = _seed_known_buckets(log_bucket, metrics_bucket)
+    _BUCKET_CACHE_BY_CREDENTIAL[credential_cache_key] = (now, buckets, last_error)
+    return buckets
 
-    _BUCKET_CACHE = set()
-    _BUCKET_CACHE_TS = now
-    return _BUCKET_CACHE
 
-def require_bucket_allowed(bucket: str, s3_client, log_bucket: Optional[str] = None, metrics_bucket: Optional[str] = None):
-    buckets = refresh_bucket_cache(s3_client, log_bucket=log_bucket, metrics_bucket=metrics_bucket)
+def require_bucket_allowed(
+    bucket: str, 
+    s3_client, 
+    credential_cache_key: str,
+    log_bucket: Optional[str] = None, 
+    metrics_bucket: Optional[str] = None
+):
+    """
+    Verify that a bucket is accessible with the provided credentials (BYOC-safe).
+    
+    Uses per-credential caching to prevent cross-user bucket leakage.
+    """
+    buckets = refresh_bucket_cache(
+        s3_client, 
+        credential_cache_key=credential_cache_key,
+        log_bucket=log_bucket, 
+        metrics_bucket=metrics_bucket
+    )
     if not buckets:
         raise HTTPException(
             status_code=403,
@@ -588,8 +649,17 @@ def bytes_to_human(n: int) -> str:
         size /= 1024.0
     return f"{size:.2f} EB"
 
-def list_objects(s3_client, bucket: str, prefix: str = "", max_items: Optional[int] = None, log_bucket: Optional[str] = None, metrics_bucket: Optional[str] = None) -> List[Dict[str, Any]]:
-    require_bucket_allowed(bucket, s3_client, log_bucket, metrics_bucket)
+def list_objects(
+    s3_client, 
+    bucket: str, 
+    credential_cache_key: str,
+    prefix: str = "", 
+    max_items: Optional[int] = None, 
+    log_bucket: Optional[str] = None, 
+    metrics_bucket: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """List objects in a bucket with per-credential cache validation (BYOC-safe)."""
+    require_bucket_allowed(bucket, s3_client, credential_cache_key, log_bucket, metrics_bucket)
     paginator = s3_client.get_paginator("list_objects_v2")
     out: List[Dict[str, Any]] = []
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
@@ -604,13 +674,21 @@ def list_objects(s3_client, bucket: str, prefix: str = "", max_items: Optional[i
                 return out
     return out
 
-def recent_objects(s3_client, bucket: str, prefix: str = "", limit: int = 10, log_bucket: Optional[str] = None, metrics_bucket: Optional[str] = None) -> Dict[str, Any]:
+def recent_objects(
+    s3_client, 
+    bucket: str, 
+    credential_cache_key: str,
+    prefix: str = "", 
+    limit: int = 10, 
+    log_bucket: Optional[str] = None, 
+    metrics_bucket: Optional[str] = None
+) -> Dict[str, Any]:
     """
     Return most recently modified objects.
     NOTE: S3 listing isn't guaranteed to be ordered by last_modified, so we sort.
     """
     limit = max(1, min(int(limit), 200))
-    objs = list_objects(s3_client, bucket, prefix=prefix, log_bucket=log_bucket, metrics_bucket=metrics_bucket)
+    objs = list_objects(s3_client, bucket, credential_cache_key, prefix=prefix, log_bucket=log_bucket, metrics_bucket=metrics_bucket)
     # sort by last_modified ISO string (UTC ISO sorts lexicographically)
     objs.sort(key=lambda x: x.get("last_modified") or "", reverse=True)
     top = objs[:limit]
@@ -712,8 +790,16 @@ def _put_metrics_line(s3_client, bucket: str, key: str, line: str, log_bucket: O
     body = gzip.compress(new_payload) if (METRICS_GZIP and key.endswith(".gz")) else new_payload
     s3_client.put_object(Bucket=bucket, Key=key, Body=body, ContentType="application/json")
 
-def storage_summary(s3_client, bucket: str, prefix: str = "", log_bucket: Optional[str] = None, metrics_bucket: Optional[str] = None) -> Dict[str, Any]:
-    objs = list_objects(s3_client, bucket, prefix=prefix, log_bucket=log_bucket, metrics_bucket=metrics_bucket)
+def storage_summary(
+    s3_client, 
+    bucket: str, 
+    credential_cache_key: str,
+    prefix: str = "", 
+    log_bucket: Optional[str] = None, 
+    metrics_bucket: Optional[str] = None
+) -> Dict[str, Any]:
+    """Get storage summary with per-credential cache validation (BYOC-safe)."""
+    objs = list_objects(s3_client, bucket, credential_cache_key, prefix=prefix, log_bucket=log_bucket, metrics_bucket=metrics_bucket)
     total = sum(o["size_bytes"] for o in objs)
     return {
         "bucket": bucket,
@@ -723,12 +809,19 @@ def storage_summary(s3_client, bucket: str, prefix: str = "", log_bucket: Option
         "total_size_human": bytes_to_human(total),
     }
 
-def compute_request_metrics_from_logs(s3_client, source_bucket: str, log_bucket: Optional[str], log_prefix: str = "") -> Dict[str, Any]:
+def compute_request_metrics_from_logs(
+    s3_client, 
+    source_bucket: str, 
+    credential_cache_key: str,
+    log_bucket: Optional[str], 
+    log_prefix: str = ""
+) -> Dict[str, Any]:
+    """Compute request metrics from access logs (BYOC-safe)."""
     if not log_bucket:
         return {"requests_total": 0, "note": "log_bucket not set"}
 
     root = normalize_prefix(log_prefix)
-    objs = list_objects(s3_client, log_bucket, prefix=root, log_bucket=log_bucket, metrics_bucket=None)
+    objs = list_objects(s3_client, log_bucket, credential_cache_key, prefix=root, log_bucket=log_bucket, metrics_bucket=None)
 
     src = source_bucket.lower().strip()
     candidates = [o for o in objs if src in o["key"].lower() and looks_like_log_key(o["key"])]
@@ -813,7 +906,7 @@ def compute_request_metrics_from_logs(s3_client, source_bucket: str, log_bucket:
     totals["top_ips"] = [{"ip": ip, "count": c} for ip, c in ip_counts.most_common(10)]
     return totals
 
-def run_metrics_snapshot(s3_client, source_bucket: str, source_prefix: str = "", log_bucket: Optional[str] = None, log_prefix: str = "", metrics_bucket: Optional[str] = None, metrics_prefix: str = "") -> Dict[str, Any]:
+def run_metrics_snapshot(s3_client, source_bucket: str, credential_cache_key: str, source_prefix: str = "", log_bucket: Optional[str] = None, log_prefix: str = "", metrics_bucket: Optional[str] = None, metrics_prefix: str = "") -> Dict[str, Any]:
     if not log_bucket:
         raise HTTPException(status_code=400, detail="log_bucket not set")
     if not metrics_bucket:
@@ -824,7 +917,7 @@ def run_metrics_snapshot(s3_client, source_bucket: str, source_prefix: str = "",
 
     src_summary = storage_summary(s3_client, bucket=source_bucket, prefix=source_prefix, log_bucket=log_bucket, metrics_bucket=metrics_bucket)
 
-    objs = list_objects(s3_client, log_bucket, prefix=logs_prefix, log_bucket=log_bucket, metrics_bucket=metrics_bucket)
+    objs = list_objects(s3_client, log_bucket, credential_cache_key, prefix=logs_prefix, log_bucket=log_bucket, metrics_bucket=metrics_bucket)
     src = source_bucket.lower().strip()
     logs_files = 0
     logs_bytes = 0
@@ -844,7 +937,7 @@ def run_metrics_snapshot(s3_client, source_bucket: str, source_prefix: str = "",
         "logs_files": int(logs_files),
         "logs_bytes": int(logs_bytes),
     }
-    record.update(compute_request_metrics_from_logs(s3_client, source_bucket, log_bucket, log_prefix))
+    record.update(compute_request_metrics_from_logs(s3_client, source_bucket, credential_cache_key, log_bucket, log_prefix))
 
     key = _metrics_key_for_ts(ts, metrics_prefix)
     _put_metrics_line(s3_client, metrics_bucket, key, json.dumps(record, separators=(",", ":")), log_bucket, metrics_bucket)
@@ -856,12 +949,12 @@ def run_metrics_snapshot(s3_client, source_bucket: str, source_prefix: str = "",
 # ============================================================
 METRICS_MAX_POINTS = int(os.getenv("METRICS_MAX_POINTS", "2000"))
 
-def metrics_sources_internal(s3_client, metrics_bucket: Optional[str], metrics_prefix: str = "", hours: int = 168, log_bucket: Optional[str] = None) -> Dict[str, Any]:
+def metrics_sources_internal(s3_client, metrics_bucket: Optional[str], credential_cache_key: str, metrics_prefix: str = "", hours: int = 168, log_bucket: Optional[str] = None) -> Dict[str, Any]:
     if not metrics_bucket:
         raise HTTPException(status_code=400, detail="metrics_bucket not set")
     hours = max(1, min(int(hours), 720))
     metrics_pfx = normalize_prefix(metrics_prefix)
-    objs = list_objects(s3_client, metrics_bucket, prefix=metrics_pfx, log_bucket=log_bucket, metrics_bucket=metrics_bucket)
+    objs = list_objects(s3_client, metrics_bucket, credential_cache_key, prefix=metrics_pfx, log_bucket=log_bucket, metrics_bucket=metrics_bucket)
     objs.sort(key=lambda x: x["last_modified"], reverse=True)
 
     cutoff = datetime.now(timezone.utc).timestamp() - (hours * 3600)
@@ -902,7 +995,7 @@ def metrics_sources_internal(s3_client, metrics_bucket: Optional[str], metrics_p
     out = sorted(sources)
     return {"count": len(out), "sources": out, "metrics_bucket": metrics_bucket, "metrics_prefix": metrics_pfx}
 
-def metrics_series_internal(s3_client, source_bucket: str, metrics_bucket: Optional[str], metrics_prefix: str = "", source_prefix: str = "", limit: int = 500, hours: int = 168, log_bucket: Optional[str] = None) -> Dict[str, Any]:
+def metrics_series_internal(s3_client, source_bucket: str, metrics_bucket: Optional[str], credential_cache_key: str, metrics_prefix: str = "", source_prefix: str = "", limit: int = 500, hours: int = 168, log_bucket: Optional[str] = None) -> Dict[str, Any]:
     if not metrics_bucket:
         raise HTTPException(status_code=400, detail="metrics_bucket not set")
     limit = max(1, min(int(limit), METRICS_MAX_POINTS))
@@ -913,7 +1006,7 @@ def metrics_series_internal(s3_client, source_bucket: str, metrics_bucket: Optio
     want_prefix = (source_prefix or "").strip()
 
     metrics_pfx = normalize_prefix(metrics_prefix)
-    objs = list_objects(s3_client, metrics_bucket, prefix=metrics_pfx, log_bucket=log_bucket, metrics_bucket=metrics_bucket)
+    objs = list_objects(s3_client, metrics_bucket, credential_cache_key, prefix=metrics_pfx, log_bucket=log_bucket, metrics_bucket=metrics_bucket)
     objs.sort(key=lambda x: x["last_modified"], reverse=True)
 
     cutoff = datetime.now(timezone.utc).timestamp() - (hours * 3600)
@@ -989,7 +1082,8 @@ def http_metrics_sources(
         raise HTTPException(status_code=400, detail="X-Metrics-Bucket header required")
     
     s3_client = create_s3_client(spaces_key, spaces_secret, region, endpoint)
-    return metrics_sources_internal(s3_client, metrics_bucket, metrics_prefix or "", hours=hours, log_bucket=log_bucket)
+    credential_cache_key = get_credential_cache_key(spaces_key, region, endpoint)
+    return metrics_sources_internal(s3_client, metrics_bucket, credential_cache_key, metrics_prefix or "", hours=hours, log_bucket=log_bucket)
 
 
 @app.get("/metrics/series")
@@ -1019,10 +1113,12 @@ def http_metrics_series(
         raise HTTPException(status_code=400, detail="X-Metrics-Bucket header required")
     
     s3_client = create_s3_client(spaces_key, spaces_secret, region, endpoint)
+    credential_cache_key = get_credential_cache_key(spaces_key, region, endpoint)
     return metrics_series_internal(
         s3_client=s3_client,
         source_bucket=source_bucket,
         metrics_bucket=metrics_bucket,
+        credential_cache_key=credential_cache_key,
         metrics_prefix=metrics_prefix or "",
         source_prefix=source_prefix,
         limit=limit,
@@ -1059,9 +1155,10 @@ def http_metrics_aggregate_series(
     hours = max(1, min(int(hours), 168))  # cap at 7 days
     
     s3_client = create_s3_client(spaces_key, spaces_secret, region, endpoint)
+    credential_cache_key = get_credential_cache_key(spaces_key, region, endpoint)
 
     # Discover buckets from snapshots, then pull series per bucket and aggregate by ts.
-    srcs = metrics_sources_internal(s3_client, metrics_bucket, metrics_prefix or "", hours=hours, log_bucket=log_bucket).get("sources") or []
+    srcs = metrics_sources_internal(s3_client, metrics_bucket, credential_cache_key, metrics_prefix or "", hours=hours, log_bucket=log_bucket).get("sources") or []
     agg: Dict[str, Dict[str, int]] = defaultdict(lambda: {
         "source_bytes": 0,
         "logs_bytes": 0,
@@ -1074,7 +1171,7 @@ def http_metrics_aggregate_series(
     })
 
     for b in srcs:
-        series = metrics_series_internal(s3_client, source_bucket=b, metrics_bucket=metrics_bucket, metrics_prefix=metrics_prefix or "", source_prefix="", hours=hours, limit=2000, log_bucket=log_bucket)
+        series = metrics_series_internal(s3_client, source_bucket=b, metrics_bucket=metrics_bucket, credential_cache_key=credential_cache_key, metrics_prefix=metrics_prefix or "", source_prefix="", hours=hours, limit=2000, log_bucket=log_bucket)
         for rec in series.get("points", []):
             ts = rec.get("ts")
             if not ts:
@@ -1212,8 +1309,8 @@ def tool_top_largest(
 # ============================================================
 # LOGS: list/read/search + object audit timeline
 # ============================================================
-def read_log_object(s3_client, bucket: str, key: str, tail_lines: int = 200, log_bucket: Optional[str] = None, metrics_bucket: Optional[str] = None) -> Dict[str, Any]:
-    require_bucket_allowed(bucket, s3_client, log_bucket, metrics_bucket)
+def read_log_object(s3_client, bucket: str, key: str, credential_cache_key: str, tail_lines: int = 200, log_bucket: Optional[str] = None, metrics_bucket: Optional[str] = None) -> Dict[str, Any]:
+    require_bucket_allowed(bucket, s3_client, credential_cache_key, log_bucket, metrics_bucket)
     obj = s3_client.get_object(Bucket=bucket, Key=key)
     raw = obj["Body"].read(MAX_LOG_BYTES + 1)
     if len(raw) > MAX_LOG_BYTES:
@@ -1224,11 +1321,11 @@ def read_log_object(s3_client, bucket: str, key: str, tail_lines: int = 200, log
     lines = safe_tail_lines(text, min(int(tail_lines), MAX_LOG_LINES))
     return {"bucket": bucket, "key": key, "returned_lines": len(lines), "log_lines": lines}
 
-def list_access_log_objects_for_source(s3_client, source_bucket: str, log_bucket: Optional[str], log_prefix: str = "", date_yyyy_mm_dd: Optional[str] = None, max_items: int = 200, metrics_bucket: Optional[str] = None) -> List[Dict[str, Any]]:
+def list_access_log_objects_for_source(s3_client, source_bucket: str, log_bucket: Optional[str], credential_cache_key: str, log_prefix: str = "", date_yyyy_mm_dd: Optional[str] = None, max_items: int = 200, metrics_bucket: Optional[str] = None) -> List[Dict[str, Any]]:
     if not log_bucket:
         raise HTTPException(status_code=400, detail="log_bucket not set")
     root = normalize_prefix(log_prefix)
-    objs = list_objects(s3_client, log_bucket, prefix=root, log_bucket=log_bucket, metrics_bucket=metrics_bucket)
+    objs = list_objects(s3_client, log_bucket, credential_cache_key, prefix=root, log_bucket=log_bucket, metrics_bucket=metrics_bucket)
     src = source_bucket.lower().strip()
     out = []
     for o in objs:
@@ -1244,6 +1341,7 @@ def search_access_logs(
     s3_client,
     source_bucket: str,
     log_bucket: Optional[str],
+    credential_cache_key: str,
     log_prefix: str = "",
     contains: Optional[str] = None,
     method: Optional[str] = None,
@@ -1256,7 +1354,7 @@ def search_access_logs(
     """
     Searches .log/.log.gz for matches. Returns parsed matches with ip/method/status/ts and the log object ref.
     """
-    candidates = list_access_log_objects_for_source(s3_client, source_bucket, log_bucket, log_prefix, date_yyyy_mm_dd=date_yyyy_mm_dd, max_items=MAX_LOG_FILES_SCAN, metrics_bucket=metrics_bucket)
+    candidates = list_access_log_objects_for_source(s3_client, source_bucket, log_bucket, credential_cache_key, log_prefix, date_yyyy_mm_dd=date_yyyy_mm_dd, max_items=MAX_LOG_FILES_SCAN, metrics_bucket=metrics_bucket)
     want_method = (method or "").upper().strip() or None
     want_contains = contains
     want_key = object_key
@@ -1332,7 +1430,7 @@ def search_access_logs(
         "note": "Matches are best-effort based on scanned recent log files.",
     }
 
-def object_audit_timeline(s3_client, source_bucket: str, object_key: str, log_bucket: Optional[str], log_prefix: str = "", hours: int = 168, limit: int = 50, methods: Optional[List[str]] = None, metrics_bucket: Optional[str] = None) -> Dict[str, Any]:
+def object_audit_timeline(s3_client, source_bucket: str, object_key: str, log_bucket: Optional[str], credential_cache_key: str, log_prefix: str = "", hours: int = 168, limit: int = 50, methods: Optional[List[str]] = None, metrics_bucket: Optional[str] = None) -> Dict[str, Any]:
     """
     CloudTrail-ish timeline for a specific object:
     - searches access logs for that object key across recent files
@@ -1349,6 +1447,7 @@ def object_audit_timeline(s3_client, source_bucket: str, object_key: str, log_bu
             s3_client=s3_client,
             source_bucket=source_bucket,
             log_bucket=log_bucket,
+            credential_cache_key=credential_cache_key,
             log_prefix=log_prefix,
             method=m,
             object_key=object_key,
@@ -1411,46 +1510,48 @@ async def startup_scheduler():
     async def loop():
         while True:
             STATS["scheduler_runs"] += 1
-            try:
-                # Priority order:
-                # 1) Explicit SCHEDULER_SOURCE_BUCKETS (doesn't require list_buckets)
-                # 2) Bucket cache (list_buckets OR seeded known buckets)
-                # 3) Discover from existing snapshots
-                buckets = list(SCHEDULER_SOURCE_BUCKETS)
-                if not buckets:
-                    buckets = sorted(list(refresh_bucket_cache()))
-                if not buckets:
-                    ms = metrics_sources_internal(hours=720)
-                    buckets = ms.get("sources") or []
-
-                for b in buckets:
-                    if ACCESS_LOGS_BUCKET and b == ACCESS_LOGS_BUCKET:
-                        continue
-                    try:
-                        run_metrics_snapshot(b, "")
-                        STATS["scheduler_snapshots_ok"] += 1
-                        logger.info(f"Metrics snapshot completed for bucket: {b}")
-                    except Exception as e:
-                        STATS["scheduler_snapshots_err"] += 1
-                        logger.error(f"Metrics snapshot failed for bucket {b}: {e}")
-                        traceback.print_exc()
-            except Exception as e:
-                STATS["scheduler_snapshots_err"] += 1
-                logger.error(f"Scheduler error: {e}")
-                traceback.print_exc()
-                buckets = []
-
-            for b in buckets:
-                if ACCESS_LOGS_BUCKET and b == ACCESS_LOGS_BUCKET:
-                    continue
-                try:
-                    run_metrics_snapshot(b, "")
-                    STATS["scheduler_snapshots_ok"] += 1
-                    logger.info(f"Metrics snapshot completed for bucket: {b}")
-                except Exception as e:
-                    STATS["scheduler_snapshots_err"] += 1
-                    logger.error(f"Metrics snapshot failed for bucket {b}: {e}")
-                    traceback.print_exc()
+            # NOTE: This scheduler is disabled in multi-tenant mode and these calls
+            # are non-functional without global credentials. Kept for legacy compatibility.
+            # try:
+            #     # Priority order:
+            #     # 1) Explicit SCHEDULER_SOURCE_BUCKETS (doesn't require list_buckets)
+            #     # 2) Bucket cache (list_buckets OR seeded known buckets)
+            #     # 3) Discover from existing snapshots
+            #     buckets = list(SCHEDULER_SOURCE_BUCKETS)
+            #     if not buckets:
+            #         buckets = sorted(list(refresh_bucket_cache()))
+            #     if not buckets:
+            #         ms = metrics_sources_internal(hours=720)
+            #         buckets = ms.get("sources") or []
+            #
+            #     for b in buckets:
+            #         if ACCESS_LOGS_BUCKET and b == ACCESS_LOGS_BUCKET:
+            #             continue
+            #         try:
+            #             run_metrics_snapshot(b, "")
+            #             STATS["scheduler_snapshots_ok"] += 1
+            #             logger.info(f"Metrics snapshot completed for bucket: {b}")
+            #         except Exception as e:
+            #             STATS["scheduler_snapshots_err"] += 1
+            #             logger.error(f"Metrics snapshot failed for bucket {b}: {e}")
+            #             traceback.print_exc()
+            # except Exception as e:
+            #     STATS["scheduler_snapshots_err"] += 1
+            #     logger.error(f"Scheduler error: {e}")
+            #     traceback.print_exc()
+            #     buckets = []
+            #
+            # for b in buckets:
+            #     if ACCESS_LOGS_BUCKET and b == ACCESS_LOGS_BUCKET:
+            #         continue
+            #     try:
+            #         run_metrics_snapshot(b, "")
+            #         STATS["scheduler_snapshots_ok"] += 1
+            #         logger.info(f"Metrics snapshot completed for bucket: {b}")
+            #     except Exception as e:
+            #         STATS["scheduler_snapshots_err"] += 1
+            #         logger.error(f"Metrics snapshot failed for bucket {b}: {e}")
+            #         traceback.print_exc()
 
             await asyncio.sleep(max(60, int(SNAPSHOT_EVERY_SEC)))
 
@@ -1545,6 +1646,7 @@ def _tool_ok(data: Any) -> Dict[str, Any]:
 def _build_tools(ctx: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     """Build tool registry with context (s3_client, buckets, prefixes)"""
     s3 = ctx["s3_client"]
+    credential_cache_key = ctx["credential_cache_key"]
     log_bucket = ctx.get("log_bucket")
     log_prefix = ctx.get("log_prefix", "")
     metrics_bucket = ctx.get("metrics_bucket")
@@ -1554,22 +1656,22 @@ def _build_tools(ctx: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         "buckets": {
             "description": "List allowed Spaces buckets. If permission fails, use metrics_sources instead.",
             "args_schema": {},
-            "fn": lambda args: {"bucket_count": len(refresh_bucket_cache(s3, force=True, log_bucket=log_bucket, metrics_bucket=metrics_bucket)), "buckets": sorted(list(refresh_bucket_cache(s3, force=True, log_bucket=log_bucket, metrics_bucket=metrics_bucket)))},
+            "fn": lambda args: {"bucket_count": len(refresh_bucket_cache(s3, credential_cache_key, force=True, log_bucket=log_bucket, metrics_bucket=metrics_bucket)), "buckets": sorted(list(refresh_bucket_cache(s3, credential_cache_key, force=True, log_bucket=log_bucket, metrics_bucket=metrics_bucket)))},
         },
         "list_objects": {
             "description": "List objects in a bucket/prefix. Use max_items to keep it small.",
             "args_schema": {"bucket": "string", "prefix": "string(optional)", "max_items": "int(optional)"},
-            "fn": lambda args: list_objects(s3, str(args["bucket"]), prefix=str(args.get("prefix") or ""), max_items=int(args.get("max_items") or MAX_LIST_OBJECTS_RETURN), log_bucket=log_bucket, metrics_bucket=metrics_bucket),
+            "fn": lambda args: list_objects(s3, str(args["bucket"]), credential_cache_key, prefix=str(args.get("prefix") or ""), max_items=int(args.get("max_items") or MAX_LIST_OBJECTS_RETURN), log_bucket=log_bucket, metrics_bucket=metrics_bucket),
         },
         "recent_objects": {
             "description": "Return most recently modified objects (sorted by last_modified).",
             "args_schema": {"bucket": "string", "prefix": "string(optional)", "limit": "int(optional)"},
-            "fn": lambda args: recent_objects(s3, str(args["bucket"]), prefix=str(args.get("prefix") or ""), limit=int(args.get("limit") or 10), log_bucket=log_bucket, metrics_bucket=metrics_bucket),
+            "fn": lambda args: recent_objects(s3, str(args["bucket"]), credential_cache_key, prefix=str(args.get("prefix") or ""), limit=int(args.get("limit") or 10), log_bucket=log_bucket, metrics_bucket=metrics_bucket),
         },
         "storage_summary": {
             "description": "Total bytes/objects for a bucket/prefix.",
             "args_schema": {"bucket": "string", "prefix": "string(optional)"},
-            "fn": lambda args: storage_summary(s3, str(args["bucket"]), prefix=str(args.get("prefix") or ""), log_bucket=log_bucket, metrics_bucket=metrics_bucket),
+            "fn": lambda args: storage_summary(s3, str(args["bucket"]), credential_cache_key, prefix=str(args.get("prefix") or ""), log_bucket=log_bucket, metrics_bucket=metrics_bucket),
         },
         "top_largest": {
             "description": "Largest objects by size for a bucket/prefix.",
@@ -1578,7 +1680,7 @@ def _build_tools(ctx: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
                 lambda bucket, prefix, limit: (
                     lambda objs: {"bucket": bucket, "prefix": prefix, "limit": limit, "objects": objs[:limit]}
                 )(
-                    sorted(list_objects(s3, bucket, prefix=prefix, log_bucket=log_bucket, metrics_bucket=metrics_bucket), key=lambda x: x["size_bytes"], reverse=True)
+                    sorted(list_objects(s3, bucket, credential_cache_key, prefix=prefix, log_bucket=log_bucket, metrics_bucket=metrics_bucket), key=lambda x: x["size_bytes"], reverse=True)
                 )
             )(str(args["bucket"]), str(args.get("prefix") or ""), max(1, min(int(args.get("limit") or 10), MAX_TOP_LARGEST))),
         },
@@ -1586,12 +1688,12 @@ def _build_tools(ctx: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         "snapshot": {
             "description": "Write a metrics snapshot for a source bucket into metrics_bucket (storage + request stats from logs).",
             "args_schema": {"source_bucket": "string", "source_prefix": "string(optional)"},
-            "fn": lambda args: run_metrics_snapshot(s3, str(args["source_bucket"]), str(args.get("source_prefix") or ""), log_bucket, log_prefix, metrics_bucket, metrics_prefix),
+            "fn": lambda args: run_metrics_snapshot(s3, str(args["source_bucket"]), credential_cache_key, str(args.get("source_prefix") or ""), log_bucket, log_prefix, metrics_bucket, metrics_prefix),
         },
         "metrics_sources": {
             "description": "Discover source buckets by scanning stored snapshots in metrics_bucket/metrics_prefix.",
             "args_schema": {"hours": "int(optional)"},
-            "fn": lambda args: metrics_sources_internal(s3, metrics_bucket, metrics_prefix, hours=int(args.get("hours") or 720), log_bucket=log_bucket),
+            "fn": lambda args: metrics_sources_internal(s3, metrics_bucket, credential_cache_key, metrics_prefix, hours=int(args.get("hours") or 720), log_bucket=log_bucket),
         },
         "metrics_series": {
             "description": "Get time series snapshot points for a source bucket/prefix.",
@@ -1600,6 +1702,7 @@ def _build_tools(ctx: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
                 s3,
                 source_bucket=str(args["source_bucket"]),
                 metrics_bucket=metrics_bucket,
+                credential_cache_key=credential_cache_key,
                 metrics_prefix=metrics_prefix,
                 source_prefix=str(args.get("source_prefix") or ""),
                 hours=int(args.get("hours") or 720),
@@ -1615,6 +1718,7 @@ def _build_tools(ctx: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
                 s3,
                 str(args["source_bucket"]),
                 log_bucket,
+                credential_cache_key,
                 log_prefix,
                 date_yyyy_mm_dd=args.get("date_yyyy_mm_dd"),
                 max_items=int(args.get("max_items") or 50),
@@ -1624,7 +1728,7 @@ def _build_tools(ctx: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         "read_log": {
             "description": "Read tail of a log object (supports .gz). Provide bucket+key.",
             "args_schema": {"bucket": "string", "key": "string", "tail_lines": "int(optional)"},
-            "fn": lambda args: read_log_object(s3, str(args["bucket"]), str(args["key"]), int(args.get("tail_lines") or 200), log_bucket=log_bucket, metrics_bucket=metrics_bucket),
+            "fn": lambda args: read_log_object(s3, str(args["bucket"]), str(args["key"]), credential_cache_key, int(args.get("tail_lines") or 200), log_bucket=log_bucket, metrics_bucket=metrics_bucket),
         },
         "search_logs": {
             "description": "Search access logs for a bucket with filters: method/object_key/status_prefix/contains (supports .gz).",
@@ -1641,6 +1745,7 @@ def _build_tools(ctx: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
                 s3,
                 source_bucket=str(args["source_bucket"]),
                 log_bucket=log_bucket,
+                credential_cache_key=credential_cache_key,
                 log_prefix=log_prefix,
                 contains=args.get("contains"),
                 method=args.get("method"),
@@ -1665,6 +1770,7 @@ def _build_tools(ctx: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
                 source_bucket=str(args["source_bucket"]),
                 object_key=str(args["object_key"]),
                 log_bucket=log_bucket,
+                credential_cache_key=credential_cache_key,
                 log_prefix=log_prefix,
                 hours=int(args.get("hours") or 168),
                 limit=int(args.get("limit") or 50),
@@ -1732,16 +1838,20 @@ def chat(req: ChatRequest, request: Request, x_api_key: Optional[str] = Header(N
     # Create S3 client from request credentials
     s3_client = create_s3_client(req.spaces_key.get_secret_value(), req.spaces_secret.get_secret_value(), req.region, req.endpoint)
     
+    # Generate credential cache key for BYOC-safe caching
+    credential_cache_key = get_credential_cache_key(req.spaces_key.get_secret_value(), req.region, req.endpoint)
+    
     # Build context for tools
     tool_ctx = {
         "s3_client": s3_client,
+        "credential_cache_key": credential_cache_key,
         "log_bucket": req.log_bucket,
         "log_prefix": req.log_prefix or "",
         "metrics_bucket": req.metrics_bucket,
         "metrics_prefix": req.metrics_prefix or "spacewatch-metrics/",
     }
 
-    mkey = memory_key(request, x_session_id)
+    mkey = memory_key(request, x_session_id, credential_cache_key)
     mem = get_memory(mkey)
 
     context = {
@@ -1751,7 +1861,7 @@ def chat(req: ChatRequest, request: Request, x_api_key: Optional[str] = Header(N
         "access_logs_prefix": normalize_prefix(req.log_prefix or ""),
         "metrics_bucket": req.metrics_bucket or "not_configured",
         "metrics_prefix": normalize_prefix(req.metrics_prefix or "spacewatch-metrics/"),
-        "bucket_cache_count": len(refresh_bucket_cache(s3_client, log_bucket=req.log_bucket, metrics_bucket=req.metrics_bucket)),
+        "bucket_cache_count": len(refresh_bucket_cache(s3_client, credential_cache_key, log_bucket=req.log_bucket, metrics_bucket=req.metrics_bucket)),
         "fallback_buckets_configured": bool(FALLBACK_BUCKETS),
         "last_bucket_context": mem.last_bucket if mem else None,
         "last_tool_context": mem.last_tool if mem else None,
@@ -2001,7 +2111,8 @@ def metrics_snapshot(
         raise HTTPException(status_code=400, detail="X-Log-Bucket and X-Metrics-Bucket headers required")
     
     s3_client = create_s3_client(spaces_key, spaces_secret, region, endpoint)
-    return run_metrics_snapshot(s3_client, source_bucket, source_prefix, log_bucket, log_prefix or "", metrics_bucket, metrics_prefix or "")
+    credential_cache_key = get_credential_cache_key(spaces_key, region, endpoint)
+    return run_metrics_snapshot(s3_client, source_bucket, credential_cache_key, source_prefix, log_bucket, log_prefix or "", metrics_bucket, metrics_prefix or "")
 
 @app.get("/metrics/top-ips")
 def get_top_ips(
@@ -2030,12 +2141,14 @@ def get_top_ips(
         raise HTTPException(status_code=400, detail="X-Log-Bucket header required")
     
     s3_client = create_s3_client(spaces_key, spaces_secret, region, endpoint)
+    credential_cache_key = get_credential_cache_key(spaces_key, region, endpoint)
     
     # Use log search and count IPs
     res = search_access_logs(
         s3_client=s3_client,
         source_bucket=source_bucket,
         log_bucket=log_bucket,
+        credential_cache_key=credential_cache_key,
         log_prefix=log_prefix or "",
         date_yyyy_mm_dd=date_yyyy_mm_dd,
         limit_matches=2000,
@@ -2090,12 +2203,14 @@ def plot_top_ips_png(
         )
 
     s3_client = create_s3_client(spaces_key, spaces_secret, region, endpoint)
+    credential_cache_key = get_credential_cache_key(spaces_key, region, endpoint)
     
     # Use log search and count IPs
     res = search_access_logs(
         s3_client=s3_client,
         source_bucket=source_bucket,
         log_bucket=log_bucket,
+        credential_cache_key=credential_cache_key,
         log_prefix=log_prefix or "",
         date_yyyy_mm_dd=date_yyyy_mm_dd,
         limit_matches=2000,
@@ -2191,9 +2306,10 @@ def trigger_snapshot_all(
         raise HTTPException(status_code=400, detail="X-Metrics-Bucket header required")
     
     s3_client = create_s3_client(spaces_key, spaces_secret, region, endpoint)
+    credential_cache_key = get_credential_cache_key(spaces_key, region, endpoint)
     
     # Get all buckets
-    buckets = refresh_bucket_cache(s3_client, force=True, log_bucket=log_bucket, metrics_bucket=metrics_bucket)
+    buckets = refresh_bucket_cache(s3_client, credential_cache_key=credential_cache_key, force=True, log_bucket=log_bucket, metrics_bucket=metrics_bucket)
     
     results = []
     errors = []
@@ -2213,6 +2329,7 @@ def trigger_snapshot_all(
             result = run_metrics_snapshot(
                 s3_client,
                 source_bucket=bucket,
+                credential_cache_key=credential_cache_key,
                 source_prefix="",
                 log_bucket=log_bucket,
                 log_prefix=log_prefix if log_prefix else "",
