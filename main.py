@@ -873,7 +873,7 @@ def detect_health_events():
     # Check traffic spike
     baseline_60m = prev_req_per_min_60m if prev_req_per_min_60m > 0 else current_req_per_min_60m
     if baseline_60m > 0 and current_req_per_min_5m > baseline_60m * 2:
-        severity = "warning" if current_req_per_min_5m < baseline_60m * 3 else "info"
+        severity = "info" if current_req_per_min_5m < baseline_60m * 3 else "warning"
         event = MissionControlEvent(
             ts=now,
             severity=severity,

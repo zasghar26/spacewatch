@@ -403,7 +403,6 @@
     function showError(message, isError = true) {
       const errorDiv = document.getElementById('errorDisplay');
       errorDiv.textContent = message;
-      errorDiv.className = isError ? 'error' : 'error';
       errorDiv.style.display = 'block';
       errorDiv.style.background = isError ? 'var(--dangerBg)' : 'var(--okBg)';
       errorDiv.style.borderColor = isError ? 'var(--danger)' : 'var(--ok)';
