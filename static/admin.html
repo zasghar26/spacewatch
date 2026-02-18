@@ -1,0 +1,767 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Mission Control - SpaceWatch Admin</title>
+  <style>
+    :root{
+      --bg:#0a0e1a;
+      --panel:#141824;
+      --border:#2a3142;
+      --muted:#8b92a7;
+      --text:#e4e7ec;
+      --danger:#ef4444;
+      --dangerBg:rgba(239,68,68,.15);
+      --warning:#f59e0b;
+      --warningBg:rgba(245,158,11,.15);
+      --info:#3b82f6;
+      --infoBg:rgba(59,130,246,.15);
+      --ok:#10b981;
+      --okBg:rgba(16,185,129,.15);
+      --accent:#0069ff;
+      --accentHover:#0052cc;
+      --accentLight:#1a4d8f;
+    }
+    * { box-sizing: border-box; }
+    body{
+      font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin:0;
+      padding:20px;
+      min-height: 100vh;
+    }
+    .wrap{ max-width: 1400px; margin:0 auto; }
+    
+    /* Header */
+    .header{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      margin-bottom:24px;
+      flex-wrap:wrap;
+      gap:16px;
+    }
+    h1{
+      margin:0;
+      font-size:28px;
+      font-weight:700;
+      letter-spacing:-.5px;
+      color:var(--text);
+    }
+    .subtitle{
+      color:var(--muted);
+      font-size:14px;
+      margin-top:4px;
+    }
+    
+    /* API Key Input */
+    .api-key-section{
+      display:flex;
+      gap:8px;
+      align-items:center;
+    }
+    .api-key-input{
+      background:var(--panel);
+      border:1px solid var(--border);
+      border-radius:6px;
+      padding:8px 12px;
+      color:var(--text);
+      font-size:14px;
+      width:240px;
+    }
+    .api-key-input:focus{
+      outline:none;
+      border-color:var(--accent);
+    }
+    .btn{
+      background:var(--accent);
+      color:#fff;
+      border:none;
+      border-radius:6px;
+      padding:8px 16px;
+      font-size:14px;
+      font-weight:500;
+      cursor:pointer;
+      transition:background .2s;
+    }
+    .btn:hover{
+      background:var(--accentHover);
+    }
+    .btn-sm{
+      padding:6px 12px;
+      font-size:13px;
+    }
+    
+    /* Status Bar */
+    .status-bar{
+      background:var(--panel);
+      border:1px solid var(--border);
+      border-radius:8px;
+      padding:20px;
+      margin-bottom:24px;
+      display:flex;
+      gap:32px;
+      align-items:center;
+      flex-wrap:wrap;
+    }
+    .status-pill{
+      padding:6px 16px;
+      border-radius:20px;
+      font-size:14px;
+      font-weight:600;
+      text-transform:uppercase;
+      letter-spacing:.5px;
+    }
+    .status-healthy{
+      background:var(--okBg);
+      color:var(--ok);
+      border:1px solid var(--ok);
+    }
+    .status-degraded{
+      background:var(--warningBg);
+      color:var(--warning);
+      border:1px solid var(--warning);
+    }
+    .status-down{
+      background:var(--dangerBg);
+      color:var(--danger);
+      border:1px solid var(--danger);
+    }
+    .metric-box{
+      display:flex;
+      flex-direction:column;
+      gap:4px;
+    }
+    .metric-label{
+      color:var(--muted);
+      font-size:12px;
+      text-transform:uppercase;
+      letter-spacing:.5px;
+    }
+    .metric-value{
+      font-size:24px;
+      font-weight:700;
+      color:var(--text);
+    }
+    .metric-unit{
+      font-size:14px;
+      font-weight:400;
+      color:var(--muted);
+      margin-left:4px;
+    }
+    
+    /* Grid Layout */
+    .grid{
+      display:grid;
+      grid-template-columns:repeat(auto-fit,minmax(400px,1fr));
+      gap:20px;
+      margin-bottom:24px;
+    }
+    .card{
+      background:var(--panel);
+      border:1px solid var(--border);
+      border-radius:8px;
+      padding:20px;
+    }
+    .card-title{
+      font-size:16px;
+      font-weight:600;
+      margin:0 0 16px;
+      color:var(--text);
+    }
+    
+    /* Chart */
+    #chart-container{
+      width:100%;
+      height:300px;
+      position:relative;
+    }
+    
+    /* Events Feed */
+    .event-item{
+      background:rgba(255,255,255,.03);
+      border-left:3px solid var(--border);
+      border-radius:4px;
+      padding:12px;
+      margin-bottom:8px;
+    }
+    .event-item.severity-disaster{
+      border-left-color:var(--danger);
+    }
+    .event-item.severity-high{
+      border-left-color:var(--warning);
+    }
+    .event-item.severity-warning{
+      border-left-color:var(--warning);
+    }
+    .event-item.severity-info{
+      border-left-color:var(--info);
+    }
+    .event-header{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      margin-bottom:6px;
+    }
+    .event-title{
+      font-size:14px;
+      font-weight:600;
+      color:var(--text);
+    }
+    .event-badge{
+      font-size:11px;
+      padding:3px 8px;
+      border-radius:10px;
+      font-weight:600;
+      text-transform:uppercase;
+    }
+    .badge-disaster{
+      background:var(--dangerBg);
+      color:var(--danger);
+    }
+    .badge-high{
+      background:var(--warningBg);
+      color:var(--warning);
+    }
+    .badge-warning{
+      background:var(--warningBg);
+      color:var(--warning);
+    }
+    .badge-info{
+      background:var(--infoBg);
+      color:var(--info);
+    }
+    .event-details{
+      font-size:13px;
+      color:var(--muted);
+    }
+    .event-time{
+      font-size:11px;
+      color:var(--muted);
+      margin-top:4px;
+    }
+    
+    /* Tables */
+    .table-container{
+      overflow-x:auto;
+    }
+    table{
+      width:100%;
+      border-collapse:collapse;
+      font-size:13px;
+    }
+    th{
+      text-align:left;
+      padding:8px;
+      border-bottom:1px solid var(--border);
+      color:var(--muted);
+      font-weight:600;
+      font-size:12px;
+      text-transform:uppercase;
+      letter-spacing:.5px;
+    }
+    td{
+      padding:8px;
+      border-bottom:1px solid rgba(42,49,66,.5);
+      color:var(--text);
+    }
+    tr:last-child td{
+      border-bottom:none;
+    }
+    .route-cell{
+      font-family:monospace;
+      font-size:12px;
+      color:var(--accent);
+    }
+    
+    /* Loading & Error States */
+    .loading{
+      text-align:center;
+      padding:40px;
+      color:var(--muted);
+    }
+    .error{
+      background:var(--dangerBg);
+      border:1px solid var(--danger);
+      border-radius:6px;
+      padding:12px;
+      color:var(--danger);
+      margin-bottom:16px;
+    }
+    .empty{
+      text-align:center;
+      padding:20px;
+      color:var(--muted);
+      font-size:14px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <!-- Header -->
+    <div class="header">
+      <div>
+        <h1>🚀 Mission Control</h1>
+        <div class="subtitle">SpaceWatch Admin Dashboard</div>
+      </div>
+      <div class="api-key-section">
+        <input type="password" id="apiKeyInput" class="api-key-input" placeholder="Enter API Key" />
+        <button class="btn btn-sm" onclick="saveApiKey()">Save</button>
+        <button class="btn btn-sm" onclick="refreshDashboard()">Refresh</button>
+      </div>
+    </div>
+    
+    <!-- Error Display -->
+    <div id="errorDisplay" style="display:none;" class="error"></div>
+    
+    <!-- Status Bar -->
+    <div class="status-bar" id="statusBar">
+      <span class="status-pill status-healthy" id="statusPill">LOADING...</span>
+      <div class="metric-box">
+        <div class="metric-label">Uptime</div>
+        <div class="metric-value" id="uptime">--</div>
+      </div>
+      <div class="metric-box">
+        <div class="metric-label">Req/Min (1m)</div>
+        <div class="metric-value"><span id="reqPerMin1m">--</span><span class="metric-unit">req/m</span></div>
+      </div>
+      <div class="metric-box">
+        <div class="metric-label">P95 Latency (5m)</div>
+        <div class="metric-value"><span id="p95Latency">--</span><span class="metric-unit">ms</span></div>
+      </div>
+      <div class="metric-box">
+        <div class="metric-label">5xx Rate (5m)</div>
+        <div class="metric-value"><span id="error5xxRate">--</span><span class="metric-unit">%</span></div>
+      </div>
+      <div class="metric-box">
+        <div class="metric-label">Active Users (30m)</div>
+        <div class="metric-value" id="activeUsers">--</div>
+      </div>
+    </div>
+    
+    <!-- Chart -->
+    <div class="card" style="margin-bottom:24px;">
+      <h3 class="card-title">📊 Time Series (Last 60m)</h3>
+      <div id="chart-container">
+        <svg id="chart" width="100%" height="100%"></svg>
+      </div>
+    </div>
+    
+    <!-- Grid for Events and Tables -->
+    <div class="grid">
+      <!-- Events Feed -->
+      <div class="card">
+        <h3 class="card-title">⚡ What Changed?</h3>
+        <div id="eventsFeed" class="loading">Loading events...</div>
+      </div>
+      
+      <!-- Top Endpoints by Volume -->
+      <div class="card">
+        <h3 class="card-title">📈 Top Endpoints (Volume)</h3>
+        <div id="topVolume" class="loading">Loading...</div>
+      </div>
+    </div>
+    
+    <!-- More Tables -->
+    <div class="grid">
+      <!-- Slowest Endpoints -->
+      <div class="card">
+        <h3 class="card-title">🐌 Slowest Endpoints (P95)</h3>
+        <div id="slowest" class="loading">Loading...</div>
+      </div>
+      
+      <!-- Error-Prone Endpoints -->
+      <div class="card">
+        <h3 class="card-title">❌ Error-Prone Endpoints (5xx)</h3>
+        <div id="errorProne" class="loading">Loading...</div>
+      </div>
+    </div>
+  </div>
+  
+  <script>
+    // API Configuration
+    let API_KEY = localStorage.getItem('missionControlApiKey') || '';
+    
+    if (API_KEY) {
+      document.getElementById('apiKeyInput').value = API_KEY;
+    }
+    
+    function saveApiKey() {
+      const input = document.getElementById('apiKeyInput');
+      API_KEY = input.value.trim();
+      if (API_KEY) {
+        localStorage.setItem('missionControlApiKey', API_KEY);
+        showError('API Key saved!', false);
+        refreshDashboard();
+      } else {
+        showError('Please enter an API key');
+      }
+    }
+    
+    function showError(message, isError = true) {
+      const errorDiv = document.getElementById('errorDisplay');
+      errorDiv.textContent = message;
+      errorDiv.className = isError ? 'error' : 'error';
+      errorDiv.style.display = 'block';
+      errorDiv.style.background = isError ? 'var(--dangerBg)' : 'var(--okBg)';
+      errorDiv.style.borderColor = isError ? 'var(--danger)' : 'var(--ok)';
+      errorDiv.style.color = isError ? 'var(--danger)' : 'var(--ok)';
+      
+      setTimeout(() => {
+        errorDiv.style.display = 'none';
+      }, 3000);
+    }
+    
+    async function fetchWithAuth(url) {
+      if (!API_KEY) {
+        throw new Error('API key not configured');
+      }
+      
+      const response = await fetch(url, {
+        headers: {
+          'X-API-Key': API_KEY
+        }
+      });
+      
+      if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error('Invalid API key');
+        }
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
+      return response.json();
+    }
+    
+    // Format uptime
+    function formatUptime(seconds) {
+      const days = Math.floor(seconds / 86400);
+      const hours = Math.floor((seconds % 86400) / 3600);
+      const mins = Math.floor((seconds % 3600) / 60);
+      
+      if (days > 0) return `${days}d ${hours}h`;
+      if (hours > 0) return `${hours}h ${mins}m`;
+      return `${mins}m`;
+    }
+    
+    // Format timestamp
+    function formatTimestamp(ts) {
+      const date = new Date(ts * 1000);
+      const now = new Date();
+      const diff = Math.floor((now - date) / 1000);
+      
+      if (diff < 60) return `${diff}s ago`;
+      if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+      if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+      return date.toLocaleString();
+    }
+    
+    // Update overview
+    async function updateOverview() {
+      try {
+        const data = await fetchWithAuth('/admin/api/mission-control');
+        
+        // Update status
+        const statusPill = document.getElementById('statusPill');
+        statusPill.textContent = data.status.toUpperCase();
+        statusPill.className = 'status-pill status-' + data.status;
+        
+        // Update metrics
+        document.getElementById('uptime').textContent = formatUptime(data.uptime_seconds);
+        document.getElementById('reqPerMin1m').textContent = data.now.req_per_min_1m.toFixed(1);
+        document.getElementById('p95Latency').textContent = data.now.p95_latency_5m.toFixed(0);
+        document.getElementById('error5xxRate').textContent = data.now.error_5xx_rate_5m.toFixed(2);
+        document.getElementById('activeUsers').textContent = data.users.unique_sessions_30m;
+        
+        // Update events
+        updateEvents(data.events);
+        
+        // Update tables
+        updateTopVolume(data.top_endpoints.by_volume);
+        updateSlowest(data.top_endpoints.slowest);
+        updateErrorProne(data.top_endpoints.error_prone);
+        
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+    
+    // Update events feed
+    function updateEvents(events) {
+      const container = document.getElementById('eventsFeed');
+      
+      if (!events || events.length === 0) {
+        container.innerHTML = '<div class="empty">No events detected</div>';
+        return;
+      }
+      
+      // Reverse to show most recent first
+      const sortedEvents = [...events].reverse();
+      
+      let html = '';
+      for (const event of sortedEvents) {
+        html += `
+          <div class="event-item severity-${event.severity}">
+            <div class="event-header">
+              <div class="event-title">${event.title}</div>
+              <span class="event-badge badge-${event.severity}">${event.severity}</span>
+            </div>
+            <div class="event-details">${event.details}</div>
+            <div class="event-time">${formatTimestamp(event.ts)}</div>
+          </div>
+        `;
+      }
+      
+      container.innerHTML = html;
+    }
+    
+    // Update top volume table
+    function updateTopVolume(routes) {
+      const container = document.getElementById('topVolume');
+      
+      if (!routes || routes.length === 0) {
+        container.innerHTML = '<div class="empty">No data</div>';
+        return;
+      }
+      
+      let html = '<div class="table-container"><table><thead><tr><th>Route</th><th>Count</th><th>Req/Min</th></tr></thead><tbody>';
+      
+      for (const route of routes) {
+        html += `
+          <tr>
+            <td class="route-cell">${route.route}</td>
+            <td>${route.count}</td>
+            <td>${route.req_per_min.toFixed(1)}</td>
+          </tr>
+        `;
+      }
+      
+      html += '</tbody></table></div>';
+      container.innerHTML = html;
+    }
+    
+    // Update slowest table
+    function updateSlowest(routes) {
+      const container = document.getElementById('slowest');
+      
+      if (!routes || routes.length === 0) {
+        container.innerHTML = '<div class="empty">No data</div>';
+        return;
+      }
+      
+      let html = '<div class="table-container"><table><thead><tr><th>Route</th><th>P95 (ms)</th><th>Count</th></tr></thead><tbody>';
+      
+      for (const route of routes) {
+        html += `
+          <tr>
+            <td class="route-cell">${route.route}</td>
+            <td>${route.p95_latency_ms}</td>
+            <td>${route.count}</td>
+          </tr>
+        `;
+      }
+      
+      html += '</tbody></table></div>';
+      container.innerHTML = html;
+    }
+    
+    // Update error-prone table
+    function updateErrorProne(routes) {
+      const container = document.getElementById('errorProne');
+      
+      if (!routes || routes.length === 0) {
+        container.innerHTML = '<div class="empty">No errors detected 🎉</div>';
+        return;
+      }
+      
+      let html = '<div class="table-container"><table><thead><tr><th>Route</th><th>5xx Count</th><th>Error Rate</th></tr></thead><tbody>';
+      
+      for (const route of routes) {
+        html += `
+          <tr>
+            <td class="route-cell">${route.route}</td>
+            <td>${route.error_5xx_count}</td>
+            <td>${route.error_5xx_rate}%</td>
+          </tr>
+        `;
+      }
+      
+      html += '</tbody></table></div>';
+      container.innerHTML = html;
+    }
+    
+    // Update time series chart
+    async function updateTimeSeries() {
+      try {
+        const data = await fetchWithAuth('/admin/api/timeseries?window=60m&resolution=1m');
+        renderChart(data);
+      } catch (error) {
+        console.error('Failed to update timeseries:', error);
+      }
+    }
+    
+    // Simple SVG chart renderer
+    function renderChart(data) {
+      const svg = document.getElementById('chart');
+      const container = document.getElementById('chart-container');
+      const width = container.clientWidth;
+      const height = 300;
+      
+      svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+      
+      // Clear existing
+      svg.innerHTML = '';
+      
+      if (!data.timestamps || data.timestamps.length === 0) {
+        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        text.setAttribute('x', width / 2);
+        text.setAttribute('y', height / 2);
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('fill', '#8b92a7');
+        text.textContent = 'No data available';
+        svg.appendChild(text);
+        return;
+      }
+      
+      // Margins
+      const margin = { top: 20, right: 20, bottom: 30, left: 60 };
+      const chartWidth = width - margin.left - margin.right;
+      const chartHeight = height - margin.top - margin.bottom;
+      
+      // Find max values for scaling
+      const maxReq = Math.max(...data.requests_per_min, 1);
+      const maxLatency = Math.max(...data.p95_latency_ms, 1);
+      
+      // Draw axes
+      const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      g.setAttribute('transform', `translate(${margin.left},${margin.top})`);
+      
+      // Y-axis line
+      const yAxis = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      yAxis.setAttribute('x1', 0);
+      yAxis.setAttribute('y1', 0);
+      yAxis.setAttribute('x2', 0);
+      yAxis.setAttribute('y2', chartHeight);
+      yAxis.setAttribute('stroke', '#2a3142');
+      yAxis.setAttribute('stroke-width', 2);
+      g.appendChild(yAxis);
+      
+      // X-axis line
+      const xAxis = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      xAxis.setAttribute('x1', 0);
+      xAxis.setAttribute('y1', chartHeight);
+      xAxis.setAttribute('x2', chartWidth);
+      xAxis.setAttribute('y2', chartHeight);
+      xAxis.setAttribute('stroke', '#2a3142');
+      xAxis.setAttribute('stroke-width', 2);
+      g.appendChild(xAxis);
+      
+      // Draw lines
+      const points = data.timestamps.length;
+      const xScale = chartWidth / (points - 1);
+      
+      // Requests line (green)
+      let reqPath = '';
+      for (let i = 0; i < points; i++) {
+        const x = i * xScale;
+        const y = chartHeight - (data.requests_per_min[i] / maxReq * chartHeight * 0.8);
+        reqPath += (i === 0 ? 'M' : 'L') + ` ${x},${y}`;
+      }
+      const reqLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      reqLine.setAttribute('d', reqPath);
+      reqLine.setAttribute('stroke', '#10b981');
+      reqLine.setAttribute('stroke-width', 2);
+      reqLine.setAttribute('fill', 'none');
+      g.appendChild(reqLine);
+      
+      // P95 latency line (blue)
+      let latencyPath = '';
+      for (let i = 0; i < points; i++) {
+        const x = i * xScale;
+        const y = chartHeight - (data.p95_latency_ms[i] / maxLatency * chartHeight * 0.8);
+        latencyPath += (i === 0 ? 'M' : 'L') + ` ${x},${y}`;
+      }
+      const latencyLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      latencyLine.setAttribute('d', latencyPath);
+      latencyLine.setAttribute('stroke', '#3b82f6');
+      latencyLine.setAttribute('stroke-width', 2);
+      latencyLine.setAttribute('fill', 'none');
+      g.appendChild(latencyLine);
+      
+      // Errors line (red)
+      let errorPath = '';
+      for (let i = 0; i < points; i++) {
+        const x = i * xScale;
+        const y = chartHeight - (data.errors_5xx_per_min[i] / Math.max(...data.errors_5xx_per_min, 1) * chartHeight * 0.5);
+        errorPath += (i === 0 ? 'M' : 'L') + ` ${x},${y}`;
+      }
+      const errorLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      errorLine.setAttribute('d', errorPath);
+      errorLine.setAttribute('stroke', '#ef4444');
+      errorLine.setAttribute('stroke-width', 2);
+      errorLine.setAttribute('fill', 'none');
+      g.appendChild(errorLine);
+      
+      // Legend
+      const legend = [
+        { color: '#10b981', label: 'Requests' },
+        { color: '#3b82f6', label: 'P95 Latency' },
+        { color: '#ef4444', label: '5xx Errors' }
+      ];
+      
+      let legendX = chartWidth - 150;
+      for (let i = 0; i < legend.length; i++) {
+        const item = legend[i];
+        const y = 15 + i * 20;
+        
+        const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        rect.setAttribute('x', legendX);
+        rect.setAttribute('y', y - 10);
+        rect.setAttribute('width', 20);
+        rect.setAttribute('height', 3);
+        rect.setAttribute('fill', item.color);
+        g.appendChild(rect);
+        
+        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        text.setAttribute('x', legendX + 25);
+        text.setAttribute('y', y);
+        text.setAttribute('fill', '#8b92a7');
+        text.setAttribute('font-size', '12');
+        text.textContent = item.label;
+        g.appendChild(text);
+      }
+      
+      svg.appendChild(g);
+    }
+    
+    // Refresh dashboard
+    function refreshDashboard() {
+      updateOverview();
+      updateTimeSeries();
+    }
+    
+    // Auto-refresh
+    let overviewInterval, timeseriesInterval;
+    
+    function startAutoRefresh() {
+      // Initial load
+      refreshDashboard();
+      
+      // Overview every 5 seconds
+      overviewInterval = setInterval(updateOverview, 5000);
+      
+      // Timeseries every 15 seconds
+      timeseriesInterval = setInterval(updateTimeSeries, 15000);
+    }
+    
+    // Start on load
+    if (API_KEY) {
+      startAutoRefresh();
+    } else {
+      showError('Please enter and save your API key to view the dashboard');
+    }
+  </script>
+</body>
+</html>
