@@ -16,6 +16,10 @@ Your SpaceWatch application has been successfully enhanced with **AWS S3 and Azu
 - `X-Log-Prefix`: Prefix for access logs (default: "")
 - `X-Metrics-Prefix`: Prefix for metrics (default: "spacewatch-metrics/")
 
+**Authentication:**
+- User endpoints (chat, tools, metrics for user buckets) - No API key required, uses Spaces credentials
+- Admin endpoints (/admin/api/*, /metrics/operations, /logs/operations, /stats) - Requires `X-API-Key` header
+
 See README.md for detailed multi-tenant usage examples.
 
 ## What's New
@@ -38,7 +42,7 @@ A new dashboard panel displays live storage metrics (auto-refreshes every 30 sec
 
 ### 2. New API Endpoints 🔌
 
-#### `/metrics/operations`
+#### `/metrics/operations` (Admin Only)
 Get detailed storage operation analytics:
 ```bash
 curl -H "X-API-Key: your_key" http://localhost:8000/metrics/operations
@@ -50,20 +54,20 @@ Returns:
 - Per-bucket analytics
 - Operation type breakdown
 
-#### `/logs/operations`
+#### `/logs/operations` (Admin Only)
 Query storage operation logs (S3-style):
 ```bash
 # Get all operations
-curl http://localhost:8000/logs/operations
+curl -H "X-API-Key: your_key" http://localhost:8000/logs/operations
 
 # Filter by operation type
-curl http://localhost:8000/logs/operations?operation_type=LIST_OBJECTS
+curl -H "X-API-Key: your_key" http://localhost:8000/logs/operations?operation_type=LIST_OBJECTS
 
 # Find slow operations (>1 second)
-curl http://localhost:8000/logs/operations?min_duration_ms=1000
+curl -H "X-API-Key: your_key" http://localhost:8000/logs/operations?min_duration_ms=1000
 
 # Filter by bucket
-curl http://localhost:8000/logs/operations?bucket=my-bucket
+curl -H "X-API-Key: your_key" http://localhost:8000/logs/operations?bucket=my-bucket
 ```
 
 #### Enhanced `/health`

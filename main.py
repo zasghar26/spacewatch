@@ -1487,7 +1487,6 @@ def http_metrics_sources(
     Frontend bucket discovery endpoint.
     Returns list of source buckets discovered from stored snapshot objects.
     """
-    require_api_key(x_api_key)
     if request:
         rate_limit(client_ip(request))
     
@@ -1518,7 +1517,6 @@ def http_metrics_series(
     """
     Frontend timeseries endpoint for a specific bucket/prefix.
     """
-    require_api_key(x_api_key)
     if request:
         rate_limit(client_ip(request))
     
@@ -1558,7 +1556,6 @@ def http_metrics_aggregate_series(
     Aggregates totals across all buckets at each timestamp from stored snapshot records.
     Returns points with summed source_bytes/logs_bytes/source_objects/logs_files and request stats if present.
     """
-    require_api_key(x_api_key)
     if request:
         rate_limit(client_ip(request))
     
@@ -1623,7 +1620,6 @@ def tool_buckets(
     x_api_key: Optional[str] = Header(None),
     request: Request = None,
 ):
-    require_api_key(x_api_key)
     if request:
         rate_limit(client_ip(request))
     STATS["tool_requests"] += 1
@@ -1655,7 +1651,6 @@ def tool_storage_summary(
     x_api_key: Optional[str] = Header(None),
     request: Request = None,
 ):
-    require_api_key(x_api_key)
     if request:
         rate_limit(client_ip(request))
     STATS["tool_requests"] += 1
@@ -1677,7 +1672,6 @@ def tool_list_all(
     x_api_key: Optional[str] = Header(None),
     request: Request = None,
 ):
-    require_api_key(x_api_key)
     if request:
         rate_limit(client_ip(request))
     STATS["tool_requests"] += 1
@@ -1707,7 +1701,6 @@ def tool_top_largest(
     x_api_key: Optional[str] = Header(None),
     request: Request = None,
 ):
-    require_api_key(x_api_key)
     if request:
         rate_limit(client_ip(request))
     STATS["tool_requests"] += 1
@@ -2241,7 +2234,6 @@ Available tools and schemas:
 # ============================================================
 @app.post("/chat")
 def chat(req: ChatRequest, request: Request, x_api_key: Optional[str] = Header(None), x_session_id: Optional[str] = Header(None)):
-    require_api_key(x_api_key)
     rate_limit(client_ip(request))
     STATS["chat_requests"] += 1
 
@@ -2517,7 +2509,6 @@ def metrics_snapshot(
     x_api_key: Optional[str] = Header(None),
     request: Request = None,
 ):
-    require_api_key(x_api_key)
     if request:
         rate_limit(client_ip(request))
     
@@ -2547,7 +2538,6 @@ def get_top_ips(
     """
     Return top IPs data as JSON for client-side Chart.js rendering.
     """
-    require_api_key(x_api_key)
     if request:
         rate_limit(client_ip(request))
     
@@ -2597,7 +2587,6 @@ def plot_top_ips_png(
     x_api_key: Optional[str] = Header(None),
     request: Request = None,
 ):
-    require_api_key(x_api_key)
     if request:
         rate_limit(client_ip(request))
     
@@ -2680,7 +2669,6 @@ def validate_credentials(
     Validate Spaces credentials by attempting to list buckets.
     Returns success if credentials are valid.
     """
-    require_api_key(x_api_key)
     
     try:
         s3_client = create_s3_client(spaces_key, spaces_secret, region, endpoint)
@@ -2714,7 +2702,6 @@ def trigger_snapshot_all(
     Trigger metrics snapshots for all discovered buckets.
     This is called automatically after credential validation.
     """
-    require_api_key(x_api_key)
     
     if not log_bucket:
         raise HTTPException(status_code=400, detail="X-Log-Bucket header required")
