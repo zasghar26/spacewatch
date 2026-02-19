@@ -832,8 +832,22 @@
       
       // Y-axis labels (5 ticks)
       const numYTicks = 5;
+      // Helper function to get nice round numbers for Y-axis
+      const getNiceNumber = (value) => {
+        if (value === 0) return 0;
+        const magnitude = Math.pow(10, Math.floor(Math.log10(value)));
+        const normalized = value / magnitude;
+        let nice;
+        if (normalized <= 1) nice = 1;
+        else if (normalized <= 2) nice = 2;
+        else if (normalized <= 5) nice = 5;
+        else nice = 10;
+        return nice * magnitude;
+      };
+      
+      const niceMax = getNiceNumber(maxReq);
       for (let i = 0; i <= numYTicks; i++) {
-        const value = (maxReq / numYTicks) * i;
+        const value = (niceMax / numYTicks) * i;
         const y = chartHeight - (chartHeight * 0.9 * i / numYTicks);
         
         // Tick mark
@@ -891,7 +905,7 @@
             hour12: false 
           });
         }
-        title.textContent = `${timestampStr}\nRequests: ${requestValue.toFixed(2)}/min`;
+        title.textContent = `${timestampStr}\nRequests: ${requestValue.toFixed(1)}/min`;
         bar.appendChild(title);
         
         g.appendChild(bar);
@@ -928,7 +942,15 @@
         } else if (typeof timestamp === 'string') {
           // String timestamp - extract time (e.g., "2024-01-01 12:30:00" -> "12:30")
           const timeMatch = timestamp.match(/(\d{2}:\d{2})/);
-          timeLabel = timeMatch ? timeMatch[1] : timestamp.split(' ')[1]?.substring(0, 5) || '';
+          if (timeMatch) {
+            timeLabel = timeMatch[1];
+          } else {
+            // Fallback: try to split and extract safely
+            const parts = timestamp.split(' ');
+            if (parts.length > 1 && parts[1].length >= 5) {
+              timeLabel = parts[1].substring(0, 5);
+            }
+          }
         }
         
         if (timeLabel) {
