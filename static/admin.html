@@ -6,27 +6,34 @@
   <title>Mission Control - SpaceWatch Admin</title>
   <style>
     :root{
-      --bg:#0a0e1a;
-      --panel:#141824;
-      --border:#2a3142;
-      --muted:#8b92a7;
-      --text:#e4e7ec;
-      --danger:#ef4444;
-      --dangerBg:rgba(239,68,68,.15);
-      --warning:#f59e0b;
-      --warningBg:rgba(245,158,11,.15);
-      --info:#3b82f6;
-      --infoBg:rgba(59,130,246,.15);
-      --ok:#10b981;
-      --okBg:rgba(16,185,129,.15);
-      --accent:#0069ff;
-      --accentHover:#0052cc;
-      --accentLight:#1a4d8f;
+      --bg:#ffffff;
+      --panel:#f2f3f3;
+      --border:#d5dbdb;
+      --muted:#545b64;
+      --text:#16191f;
+      --danger:#d13212;
+      --dangerBg:rgba(209,50,18,.1);
+      --dangerBorder:#d13212;
+      --warning:#ff9900;
+      --warningBg:rgba(255,153,0,.1);
+      --warnBorder:#ff9900;
+      --info:#0073bb;
+      --infoBg:rgba(0,115,187,.1);
+      --ok:#1d8102;
+      --okBg:rgba(29,129,2,.1);
+      --okBorder:#1d8102;
+      --accent:#0073bb;
+      --accentHover:#005a9e;
+      --accentLight:#e6f2f8;
+      --doBlue:#0069ff;
+      --doBlueLight:#e6f0ff;
+      --doBlueDark:#003d99;
     }
     * { box-sizing: border-box; }
     body{
       font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
-      background: var(--bg);
+      background: linear-gradient(135deg, #e6f0ff 0%, #f0f7ff 25%, #ffffff 50%, #f0f7ff 75%, #e6f0ff 100%);
+      background-attachment: fixed;
       color: var(--text);
       margin:0;
       padding:20px;
@@ -56,14 +63,14 @@
       margin-top:4px;
     }
     
-    /* API Key Input */
-    .api-key-section{
+    /* Security Token Input */
+    .security-token-section{
       display:flex;
       gap:8px;
       align-items:center;
     }
-    .api-key-input{
-      background:var(--panel);
+    .security-token-input{
+      background:#ffffff;
       border:1px solid var(--border);
       border-radius:6px;
       padding:8px 12px;
@@ -96,8 +103,8 @@
     
     /* Status Bar */
     .status-bar{
-      background:var(--panel);
-      border:1px solid var(--border);
+      background:#ffffff;
+      border:1px solid rgba(0, 105, 255, 0.2);
       border-radius:8px;
       padding:20px;
       margin-bottom:24px;
@@ -105,6 +112,7 @@
       gap:32px;
       align-items:center;
       flex-wrap:wrap;
+      box-shadow: 0 2px 12px rgba(0, 105, 255, 0.15);
     }
     .status-pill{
       padding:6px 16px;
@@ -160,10 +168,11 @@
       margin-bottom:24px;
     }
     .card{
-      background:var(--panel);
-      border:1px solid var(--border);
+      background:#ffffff;
+      border:1px solid rgba(0, 105, 255, 0.2);
       border-radius:8px;
       padding:20px;
+      box-shadow: 0 2px 12px rgba(0, 105, 255, 0.15);
     }
     .card-title{
       font-size:16px;
@@ -181,7 +190,7 @@
     
     /* Events Feed */
     .event-item{
-      background:rgba(255,255,255,.03);
+      background:rgba(0, 105, 255, .03);
       border-left:3px solid var(--border);
       border-radius:4px;
       padding:12px;
@@ -189,15 +198,19 @@
     }
     .event-item.severity-disaster{
       border-left-color:var(--danger);
+      background:var(--dangerBg);
     }
     .event-item.severity-high{
       border-left-color:var(--warning);
+      background:var(--warningBg);
     }
     .event-item.severity-warning{
       border-left-color:var(--warning);
+      background:var(--warningBg);
     }
     .event-item.severity-info{
       border-left-color:var(--info);
+      background:var(--infoBg);
     }
     .event-header{
       display:flex;
@@ -273,7 +286,7 @@
     .route-cell{
       font-family:monospace;
       font-size:12px;
-      color:var(--accent);
+      color:var(--doBlue);
     }
     
     /* Loading & Error States */
@@ -296,6 +309,69 @@
       color:var(--muted);
       font-size:14px;
     }
+    
+    /* Pagination & Filters */
+    .filter-bar{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      margin-bottom:16px;
+      gap:12px;
+      flex-wrap:wrap;
+    }
+    .filter-buttons{
+      display:flex;
+      gap:8px;
+    }
+    .filter-btn{
+      background:var(--panel);
+      border:1px solid var(--border);
+      border-radius:6px;
+      padding:6px 12px;
+      font-size:12px;
+      font-weight:600;
+      text-transform:uppercase;
+      cursor:pointer;
+      transition:all .2s;
+      color:var(--text);
+    }
+    .filter-btn:hover{
+      background:var(--accentLight);
+      border-color:var(--accent);
+    }
+    .filter-btn.active{
+      background:var(--doBlue);
+      color:#fff;
+      border-color:var(--doBlue);
+    }
+    .pagination{
+      display:flex;
+      gap:8px;
+      align-items:center;
+    }
+    .page-btn{
+      background:var(--panel);
+      border:1px solid var(--border);
+      border-radius:6px;
+      padding:6px 12px;
+      font-size:12px;
+      font-weight:500;
+      cursor:pointer;
+      transition:all .2s;
+      color:var(--text);
+    }
+    .page-btn:hover:not(:disabled){
+      background:var(--accentLight);
+      border-color:var(--accent);
+    }
+    .page-btn:disabled{
+      opacity:0.5;
+      cursor:not-allowed;
+    }
+    .page-info{
+      font-size:12px;
+      color:var(--muted);
+    }
   </style>
 </head>
 <body>
@@ -306,9 +382,9 @@
         <h1>🚀 Mission Control</h1>
         <div class="subtitle">SpaceWatch Admin Dashboard</div>
       </div>
-      <div class="api-key-section">
-        <input type="password" id="apiKeyInput" class="api-key-input" placeholder="Enter API Key" />
-        <button class="btn btn-sm" onclick="saveApiKey()">Save</button>
+      <div class="security-token-section">
+        <input type="password" id="securityTokenInput" class="security-token-input" placeholder="Enter Security Token" />
+        <button class="btn btn-sm" onclick="saveSecurityToken()">Save</button>
         <button class="btn btn-sm" onclick="refreshDashboard()">Refresh</button>
       </div>
     </div>
@@ -354,7 +430,20 @@
       <!-- Events Feed -->
       <div class="card">
         <h3 class="card-title">⚡ What Changed?</h3>
+        <div class="filter-bar">
+          <div class="filter-buttons">
+            <button class="filter-btn active" data-severity="all" onclick="filterEvents('all')">All</button>
+            <button class="filter-btn" data-severity="info" onclick="filterEvents('info')">Info</button>
+            <button class="filter-btn" data-severity="warning" onclick="filterEvents('warning')">Warning</button>
+            <button class="filter-btn" data-severity="critical" onclick="filterEvents('critical')">Critical</button>
+          </div>
+        </div>
         <div id="eventsFeed" class="loading">Loading events...</div>
+        <div class="pagination" id="eventsPagination" style="display:none; margin-top:12px;">
+          <button class="page-btn" onclick="previousEventsPage()">Previous</button>
+          <span class="page-info" id="eventsPageInfo"></span>
+          <button class="page-btn" onclick="nextEventsPage()">Next</button>
+        </div>
       </div>
       
       <!-- Top Endpoints by Volume -->
@@ -381,22 +470,22 @@
   </div>
   
   <script>
-    // API Configuration
-    let API_KEY = localStorage.getItem('missionControlApiKey') || '';
+    // Security Token Configuration
+    let API_KEY = localStorage.getItem('missionControlSecurityToken') || '';
     
     if (API_KEY) {
-      document.getElementById('apiKeyInput').value = API_KEY;
+      document.getElementById('securityTokenInput').value = API_KEY;
     }
     
-    function saveApiKey() {
-      const input = document.getElementById('apiKeyInput');
+    function saveSecurityToken() {
+      const input = document.getElementById('securityTokenInput');
       API_KEY = input.value.trim();
       if (API_KEY) {
-        localStorage.setItem('missionControlApiKey', API_KEY);
-        showError('API Key saved!', false);
+        localStorage.setItem('missionControlSecurityToken', API_KEY);
+        showError('Security Token saved!', false);
         refreshDashboard();
       } else {
-        showError('Please enter an API key');
+        showError('Please enter a security token');
       }
     }
     
@@ -415,7 +504,7 @@
     
     async function fetchWithAuth(url) {
       if (!API_KEY) {
-        throw new Error('API key not configured');
+        throw new Error('Security token not configured');
       }
       
       const response = await fetch(url, {
@@ -426,7 +515,7 @@
       
       if (!response.ok) {
         if (response.status === 401) {
-          throw new Error('Invalid API key');
+          throw new Error('Invalid security token');
         }
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
@@ -487,20 +576,88 @@
       }
     }
     
+    // Events state
+    let allEvents = [];
+    let filteredEvents = [];
+    let currentFilter = 'all';
+    let currentPage = 1;
+    const eventsPerPage = 5;
+    
     // Update events feed
     function updateEvents(events) {
-      const container = document.getElementById('eventsFeed');
+      allEvents = events || [];
       
-      if (!events || events.length === 0) {
-        container.innerHTML = '<div class="empty">No events detected</div>';
-        return;
+      // Apply current filter
+      filterEvents(currentFilter);
+    }
+    
+    // Filter events by severity
+    function filterEvents(severity) {
+      currentFilter = severity;
+      currentPage = 1;
+      
+      // Update active button
+      document.querySelectorAll('.filter-btn').forEach(btn => {
+        btn.classList.remove('active');
+        if (btn.dataset.severity === severity) {
+          btn.classList.add('active');
+        }
+      });
+      
+      // Filter events
+      if (severity === 'all') {
+        filteredEvents = [...allEvents];
+      } else if (severity === 'critical') {
+        // Map disaster and high to critical
+        filteredEvents = allEvents.filter(e => e.severity === 'disaster' || e.severity === 'high');
+      } else {
+        filteredEvents = allEvents.filter(e => e.severity === severity);
       }
       
       // Reverse to show most recent first
-      const sortedEvents = [...events].reverse();
+      filteredEvents = filteredEvents.reverse();
       
+      renderEventsPage();
+    }
+    
+    // Navigate to next page
+    function nextEventsPage() {
+      const totalPages = Math.ceil(filteredEvents.length / eventsPerPage);
+      if (currentPage < totalPages) {
+        currentPage++;
+        renderEventsPage();
+      }
+    }
+    
+    // Navigate to previous page
+    function previousEventsPage() {
+      if (currentPage > 1) {
+        currentPage--;
+        renderEventsPage();
+      }
+    }
+    
+    // Render current page of events
+    function renderEventsPage() {
+      const container = document.getElementById('eventsFeed');
+      const paginationDiv = document.getElementById('eventsPagination');
+      const pageInfoSpan = document.getElementById('eventsPageInfo');
+      
+      if (filteredEvents.length === 0) {
+        container.innerHTML = '<div class="empty">No events detected</div>';
+        paginationDiv.style.display = 'none';
+        return;
+      }
+      
+      // Calculate pagination
+      const totalPages = Math.ceil(filteredEvents.length / eventsPerPage);
+      const startIdx = (currentPage - 1) * eventsPerPage;
+      const endIdx = Math.min(startIdx + eventsPerPage, filteredEvents.length);
+      const pageEvents = filteredEvents.slice(startIdx, endIdx);
+      
+      // Render events
       let html = '';
-      for (const event of sortedEvents) {
+      for (const event of pageEvents) {
         html += `
           <div class="event-item severity-${event.severity}">
             <div class="event-header">
@@ -514,6 +671,20 @@
       }
       
       container.innerHTML = html;
+      
+      // Update pagination
+      if (totalPages > 1) {
+        paginationDiv.style.display = 'flex';
+        pageInfoSpan.textContent = `Page ${currentPage} of ${totalPages}`;
+        
+        // Update button states
+        const prevBtn = paginationDiv.querySelector('.page-btn:first-child');
+        const nextBtn = paginationDiv.querySelector('.page-btn:last-child');
+        prevBtn.disabled = currentPage === 1;
+        nextBtn.disabled = currentPage === totalPages;
+      } else {
+        paginationDiv.style.display = 'none';
+      }
     }
     
     // Update top volume table
@@ -601,7 +772,7 @@
       }
     }
     
-    // Simple SVG chart renderer
+    // Simple SVG bar chart renderer
     function renderChart(data) {
       const svg = document.getElementById('chart');
       const container = document.getElementById('chart-container');
@@ -618,7 +789,7 @@
         text.setAttribute('x', width / 2);
         text.setAttribute('y', height / 2);
         text.setAttribute('text-anchor', 'middle');
-        text.setAttribute('fill', '#8b92a7');
+        text.setAttribute('fill', 'var(--muted)');
         text.textContent = 'No data available';
         svg.appendChild(text);
         return;
@@ -631,7 +802,6 @@
       
       // Find max values for scaling
       const maxReq = Math.max(...data.requests_per_min, 1);
-      const maxLatency = Math.max(...data.p95_latency_ms, 1);
       
       // Draw axes
       const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
@@ -643,7 +813,7 @@
       yAxis.setAttribute('y1', 0);
       yAxis.setAttribute('x2', 0);
       yAxis.setAttribute('y2', chartHeight);
-      yAxis.setAttribute('stroke', '#2a3142');
+      yAxis.setAttribute('stroke', 'var(--border)');
       yAxis.setAttribute('stroke-width', 2);
       g.appendChild(yAxis);
       
@@ -653,61 +823,34 @@
       xAxis.setAttribute('y1', chartHeight);
       xAxis.setAttribute('x2', chartWidth);
       xAxis.setAttribute('y2', chartHeight);
-      xAxis.setAttribute('stroke', '#2a3142');
+      xAxis.setAttribute('stroke', 'var(--border)');
       xAxis.setAttribute('stroke-width', 2);
       g.appendChild(xAxis);
       
-      // Draw lines
+      // Draw bars
       const points = data.timestamps.length;
-      const xScale = chartWidth / (points - 1);
+      const barWidth = (chartWidth / points) * 0.8; // 80% width to add spacing
+      const barSpacing = (chartWidth / points) * 0.2;
       
-      // Requests line (green)
-      let reqPath = '';
+      // Requests bars (green)
       for (let i = 0; i < points; i++) {
-        const x = i * xScale;
-        const y = chartHeight - (data.requests_per_min[i] / maxReq * chartHeight * 0.8);
-        reqPath += (i === 0 ? 'M' : 'L') + ` ${x},${y}`;
+        const x = (i * chartWidth / points) + (barSpacing / 2);
+        const barHeight = (data.requests_per_min[i] / maxReq * chartHeight * 0.9);
+        const y = chartHeight - barHeight;
+        
+        const bar = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        bar.setAttribute('x', x);
+        bar.setAttribute('y', y);
+        bar.setAttribute('width', barWidth);
+        bar.setAttribute('height', barHeight);
+        bar.setAttribute('fill', '#1d8102');
+        bar.setAttribute('opacity', '0.7');
+        g.appendChild(bar);
       }
-      const reqLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      reqLine.setAttribute('d', reqPath);
-      reqLine.setAttribute('stroke', '#10b981');
-      reqLine.setAttribute('stroke-width', 2);
-      reqLine.setAttribute('fill', 'none');
-      g.appendChild(reqLine);
-      
-      // P95 latency line (blue)
-      let latencyPath = '';
-      for (let i = 0; i < points; i++) {
-        const x = i * xScale;
-        const y = chartHeight - (data.p95_latency_ms[i] / maxLatency * chartHeight * 0.8);
-        latencyPath += (i === 0 ? 'M' : 'L') + ` ${x},${y}`;
-      }
-      const latencyLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      latencyLine.setAttribute('d', latencyPath);
-      latencyLine.setAttribute('stroke', '#3b82f6');
-      latencyLine.setAttribute('stroke-width', 2);
-      latencyLine.setAttribute('fill', 'none');
-      g.appendChild(latencyLine);
-      
-      // Errors line (red)
-      let errorPath = '';
-      for (let i = 0; i < points; i++) {
-        const x = i * xScale;
-        const y = chartHeight - (data.errors_5xx_per_min[i] / Math.max(...data.errors_5xx_per_min, 1) * chartHeight * 0.5);
-        errorPath += (i === 0 ? 'M' : 'L') + ` ${x},${y}`;
-      }
-      const errorLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      errorLine.setAttribute('d', errorPath);
-      errorLine.setAttribute('stroke', '#ef4444');
-      errorLine.setAttribute('stroke-width', 2);
-      errorLine.setAttribute('fill', 'none');
-      g.appendChild(errorLine);
       
       // Legend
       const legend = [
-        { color: '#10b981', label: 'Requests' },
-        { color: '#3b82f6', label: 'P95 Latency' },
-        { color: '#ef4444', label: '5xx Errors' }
+        { color: '#1d8102', label: 'Requests/min' }
       ];
       
       let legendX = chartWidth - 150;
@@ -719,14 +862,15 @@
         rect.setAttribute('x', legendX);
         rect.setAttribute('y', y - 10);
         rect.setAttribute('width', 20);
-        rect.setAttribute('height', 3);
+        rect.setAttribute('height', 12);
         rect.setAttribute('fill', item.color);
+        rect.setAttribute('opacity', '0.7');
         g.appendChild(rect);
         
         const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
         text.setAttribute('x', legendX + 25);
         text.setAttribute('y', y);
-        text.setAttribute('fill', '#8b92a7');
+        text.setAttribute('fill', 'var(--muted)');
         text.setAttribute('font-size', '12');
         text.textContent = item.label;
         g.appendChild(text);
@@ -759,7 +903,7 @@
     if (API_KEY) {
       startAutoRefresh();
     } else {
-      showError('Please enter and save your API key to view the dashboard');
+      showError('Please enter and save your security token to view the dashboard');
     }
   </script>
 </body>
