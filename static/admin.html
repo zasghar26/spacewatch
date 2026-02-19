@@ -28,11 +28,14 @@
       --doBlue:#0069ff;
       --doBlueLight:#e6f0ff;
       --doBlueDark:#003d99;
+      --gradientStart:#e6f0ff;
+      --gradientMid:#f0f7ff;
+      --gradientEnd:#ffffff;
     }
     * { box-sizing: border-box; }
     body{
       font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
-      background: linear-gradient(135deg, #e6f0ff 0%, #f0f7ff 25%, #ffffff 50%, #f0f7ff 75%, #e6f0ff 100%);
+      background: linear-gradient(135deg, var(--gradientStart) 0%, var(--gradientMid) 25%, var(--gradientEnd) 50%, var(--gradientMid) 75%, var(--gradientStart) 100%);
       background-attachment: fixed;
       color: var(--text);
       margin:0;
@@ -471,17 +474,17 @@
   
   <script>
     // Security Token Configuration
-    let API_KEY = localStorage.getItem('missionControlSecurityToken') || '';
+    let SECURITY_TOKEN = localStorage.getItem('missionControlSecurityToken') || '';
     
-    if (API_KEY) {
-      document.getElementById('securityTokenInput').value = API_KEY;
+    if (SECURITY_TOKEN) {
+      document.getElementById('securityTokenInput').value = SECURITY_TOKEN;
     }
     
     function saveSecurityToken() {
       const input = document.getElementById('securityTokenInput');
-      API_KEY = input.value.trim();
-      if (API_KEY) {
-        localStorage.setItem('missionControlSecurityToken', API_KEY);
+      SECURITY_TOKEN = input.value.trim();
+      if (SECURITY_TOKEN) {
+        localStorage.setItem('missionControlSecurityToken', SECURITY_TOKEN);
         showError('Security Token saved!', false);
         refreshDashboard();
       } else {
@@ -503,13 +506,13 @@
     }
     
     async function fetchWithAuth(url) {
-      if (!API_KEY) {
+      if (!SECURITY_TOKEN) {
         throw new Error('Security token not configured');
       }
       
       const response = await fetch(url, {
         headers: {
-          'X-API-Key': API_KEY
+          'X-API-Key': SECURITY_TOKEN
         }
       });
       
@@ -843,14 +846,14 @@
         bar.setAttribute('y', y);
         bar.setAttribute('width', barWidth);
         bar.setAttribute('height', barHeight);
-        bar.setAttribute('fill', '#1d8102');
+        bar.setAttribute('fill', 'var(--ok)');
         bar.setAttribute('opacity', '0.7');
         g.appendChild(bar);
       }
       
       // Legend
       const legend = [
-        { color: '#1d8102', label: 'Requests/min' }
+        { color: 'var(--ok)', label: 'Requests/min' }
       ];
       
       let legendX = chartWidth - 150;
@@ -900,7 +903,7 @@
     }
     
     // Start on load
-    if (API_KEY) {
+    if (SECURITY_TOKEN) {
       startAutoRefresh();
     } else {
       showError('Please enter and save your security token to view the dashboard');
