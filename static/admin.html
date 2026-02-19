@@ -864,14 +864,15 @@
         tick.setAttribute('stroke-width', 1);
         g.appendChild(tick);
         
-        // Label
+        // Label - display whole numbers without unnecessary decimals
         const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
         label.setAttribute('x', -10);
         label.setAttribute('y', y + 4);
         label.setAttribute('text-anchor', 'end');
         label.setAttribute('fill', 'var(--muted)');
         label.setAttribute('font-size', '11');
-        label.textContent = value.toFixed(DECIMAL_PRECISION);
+        // Use toFixed(0) for whole numbers, toFixed(1) for fractional values
+        label.textContent = (value % 1 === 0) ? value.toFixed(0) : value.toFixed(DECIMAL_PRECISION);
         g.appendChild(label);
       }
       
@@ -884,7 +885,8 @@
       for (let i = 0; i < points; i++) {
         const x = (i * chartWidth / points) + (barSpacing / 2);
         const requestValue = data.requests_per_min[i];
-        const barHeight = (requestValue / maxReq * chartHeight * CHART_SCALE_FACTOR);
+        // Scale bars against niceMax to align with Y-axis scale
+        const barHeight = (requestValue / niceMax * chartHeight * CHART_SCALE_FACTOR);
         const y = chartHeight - barHeight;
         
         const bar = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
@@ -909,7 +911,8 @@
             hour12: false 
           });
         }
-        title.textContent = `${timestampStr}\nRequests: ${requestValue.toFixed(DECIMAL_PRECISION)}/min`;
+        // Request counts are discrete, display as whole numbers
+        title.textContent = `${timestampStr}\nRequests: ${Math.round(requestValue)}/min`;
         bar.appendChild(title);
         
         g.appendChild(bar);
@@ -923,7 +926,8 @@
           valueLabel.setAttribute('fill', 'var(--muted)');
           valueLabel.setAttribute('font-size', '10');
           valueLabel.setAttribute('font-weight', 'bold');
-          valueLabel.textContent = requestValue.toFixed(DECIMAL_PRECISION);
+          // Request counts are discrete, display as whole numbers
+          valueLabel.textContent = Math.round(requestValue);
           g.appendChild(valueLabel);
         }
       }
