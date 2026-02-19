@@ -860,6 +860,16 @@
       yAxis.setAttribute('stroke-width', 2);
       g.appendChild(yAxis);
       
+      // Right Y-axis line
+      const yAxisRight = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      yAxisRight.setAttribute('x1', chartWidth);
+      yAxisRight.setAttribute('y1', 0);
+      yAxisRight.setAttribute('x2', chartWidth);
+      yAxisRight.setAttribute('y2', chartHeight);
+      yAxisRight.setAttribute('stroke', 'var(--border)');
+      yAxisRight.setAttribute('stroke-width', 2);
+      g.appendChild(yAxisRight);
+      
       // X-axis line
       const xAxis = document.createElementNS('http://www.w3.org/2000/svg', 'line');
       xAxis.setAttribute('x1', 0);
@@ -911,6 +921,32 @@
         label.setAttribute('font-size', '11');
         label.textContent = formatChartValue(value);
         g.appendChild(label);
+      }
+      
+      // Right Y-axis labels and tick marks (mirror left side)
+      for (let i = 0; i <= numYTicks; i++) {
+        const value = (niceMax / numYTicks) * i;
+        const y = chartHeight - (usableHeight * i / numYTicks);
+        
+        // Right tick mark
+        const tickRight = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        tickRight.setAttribute('x1', chartWidth);
+        tickRight.setAttribute('y1', y);
+        tickRight.setAttribute('x2', chartWidth + 5);
+        tickRight.setAttribute('y2', y);
+        tickRight.setAttribute('stroke', 'var(--border)');
+        tickRight.setAttribute('stroke-width', 1);
+        g.appendChild(tickRight);
+        
+        // Right label
+        const labelRight = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        labelRight.setAttribute('x', chartWidth + 10);
+        labelRight.setAttribute('y', y + 4);
+        labelRight.setAttribute('text-anchor', 'start');
+        labelRight.setAttribute('fill', 'var(--muted)');
+        labelRight.setAttribute('font-size', '11');
+        labelRight.textContent = formatChartValue(value);
+        g.appendChild(labelRight);
       }
       
       // Draw bars
