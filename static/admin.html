@@ -803,6 +803,10 @@
       const chartWidth = width - margin.left - margin.right;
       const chartHeight = height - margin.top - margin.bottom;
       
+      // Constants for chart rendering
+      const CHART_SCALE_FACTOR = 0.9; // Usable height ratio (leave 10% padding at top)
+      const DECIMAL_PRECISION = 1; // Number of decimal places for display
+      
       // Find max values for scaling
       const maxReq = Math.max(...data.requests_per_min, 1);
       
@@ -848,7 +852,7 @@
       const niceMax = getNiceNumber(maxReq);
       for (let i = 0; i <= numYTicks; i++) {
         const value = (niceMax / numYTicks) * i;
-        const y = chartHeight - (chartHeight * 0.9 * i / numYTicks);
+        const y = chartHeight - (chartHeight * CHART_SCALE_FACTOR * i / numYTicks);
         
         // Tick mark
         const tick = document.createElementNS('http://www.w3.org/2000/svg', 'line');
@@ -867,7 +871,7 @@
         label.setAttribute('text-anchor', 'end');
         label.setAttribute('fill', 'var(--muted)');
         label.setAttribute('font-size', '11');
-        label.textContent = value.toFixed(1);
+        label.textContent = value.toFixed(DECIMAL_PRECISION);
         g.appendChild(label);
       }
       
@@ -880,7 +884,7 @@
       for (let i = 0; i < points; i++) {
         const x = (i * chartWidth / points) + (barSpacing / 2);
         const requestValue = data.requests_per_min[i];
-        const barHeight = (requestValue / maxReq * chartHeight * 0.9);
+        const barHeight = (requestValue / maxReq * chartHeight * CHART_SCALE_FACTOR);
         const y = chartHeight - barHeight;
         
         const bar = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
@@ -905,7 +909,7 @@
             hour12: false 
           });
         }
-        title.textContent = `${timestampStr}\nRequests: ${requestValue.toFixed(1)}/min`;
+        title.textContent = `${timestampStr}\nRequests: ${requestValue.toFixed(DECIMAL_PRECISION)}/min`;
         bar.appendChild(title);
         
         g.appendChild(bar);
@@ -919,7 +923,7 @@
           valueLabel.setAttribute('fill', 'var(--muted)');
           valueLabel.setAttribute('font-size', '10');
           valueLabel.setAttribute('font-weight', 'bold');
-          valueLabel.textContent = requestValue.toFixed(1);
+          valueLabel.textContent = requestValue.toFixed(DECIMAL_PRECISION);
           g.appendChild(valueLabel);
         }
       }
