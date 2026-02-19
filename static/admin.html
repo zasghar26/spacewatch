@@ -807,6 +807,7 @@
       const Y_AXIS_USABLE_HEIGHT_RATIO = 0.9; // Leave 10% padding at top for value labels
       const DECIMAL_PRECISION = 1; // Number of decimal places for fractional values
       const TIME_FORMAT_LENGTH = 5; // Length of 'HH:MM' format
+      const TIME_PATTERN = /(\d{2}:\d{2})/; // Regex pattern for extracting HH:MM format
       
       // Helper function to format chart values (whole vs decimal)
       const formatChartValue = (value) => {
@@ -818,18 +819,18 @@
         if (typeof timestamp === 'number') {
           const date = new Date(timestamp * 1000);
           if (formatType === 'time') {
-            return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+            return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
           } else {
             return date.toLocaleString('en-US', { 
               month: '2-digit', 
               day: '2-digit', 
               hour: '2-digit', 
               minute: '2-digit', 
-              hour12: false 
+              hourCycle: 'h23' 
             });
           }
         } else if (typeof timestamp === 'string') {
-          const timeMatch = timestamp.match(/(\d{2}:\d{2})/);
+          const timeMatch = timestamp.match(TIME_PATTERN);
           if (timeMatch) {
             return timeMatch[1];
           } else {
@@ -885,9 +886,11 @@
       };
       
       const niceMax = getNiceNumber(maxReq);
+      const usableHeight = chartHeight * Y_AXIS_USABLE_HEIGHT_RATIO;
+      
       for (let i = 0; i <= numYTicks; i++) {
         const value = (niceMax / numYTicks) * i;
-        const y = chartHeight - (chartHeight * Y_AXIS_USABLE_HEIGHT_RATIO * i / numYTicks);
+        const y = chartHeight - (usableHeight * i / numYTicks);
         
         // Tick mark
         const tick = document.createElementNS('http://www.w3.org/2000/svg', 'line');
@@ -920,7 +923,7 @@
         const x = (i * chartWidth / points) + (barSpacing / 2);
         const requestValue = data.requests_per_min[i];
         // Scale bars against niceMax to align with Y-axis scale
-        const barHeight = (requestValue / niceMax * chartHeight * Y_AXIS_USABLE_HEIGHT_RATIO);
+        const barHeight = (requestValue / niceMax * usableHeight);
         const y = chartHeight - barHeight;
         
         const bar = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
