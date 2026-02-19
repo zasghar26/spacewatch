@@ -830,6 +830,33 @@
       xAxis.setAttribute('stroke-width', 2);
       g.appendChild(xAxis);
       
+      // Y-axis labels (5 ticks)
+      const numYTicks = 5;
+      for (let i = 0; i <= numYTicks; i++) {
+        const value = (maxReq / numYTicks) * i;
+        const y = chartHeight - (chartHeight * 0.9 * i / numYTicks);
+        
+        // Tick mark
+        const tick = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        tick.setAttribute('x1', -5);
+        tick.setAttribute('y1', y);
+        tick.setAttribute('x2', 0);
+        tick.setAttribute('y2', y);
+        tick.setAttribute('stroke', 'var(--border)');
+        tick.setAttribute('stroke-width', 1);
+        g.appendChild(tick);
+        
+        // Label
+        const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        label.setAttribute('x', -10);
+        label.setAttribute('y', y + 4);
+        label.setAttribute('text-anchor', 'end');
+        label.setAttribute('fill', 'var(--muted)');
+        label.setAttribute('font-size', '11');
+        label.textContent = value.toFixed(1);
+        g.appendChild(label);
+      }
+      
       // Draw bars
       const points = data.timestamps.length;
       const barWidth = (chartWidth / points) * 0.8; // 80% width to add spacing
@@ -838,7 +865,8 @@
       // Requests bars (green)
       for (let i = 0; i < points; i++) {
         const x = (i * chartWidth / points) + (barSpacing / 2);
-        const barHeight = (data.requests_per_min[i] / maxReq * chartHeight * 0.9);
+        const requestValue = data.requests_per_min[i];
+        const barHeight = (requestValue / maxReq * chartHeight * 0.9);
         const y = chartHeight - barHeight;
         
         const bar = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
@@ -848,7 +876,71 @@
         bar.setAttribute('height', barHeight);
         bar.setAttribute('fill', 'var(--ok)');
         bar.setAttribute('opacity', '0.7');
+        
+        // Add tooltip with timestamp and value
+        const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+        let timestampStr = data.timestamps[i];
+        if (typeof timestampStr === 'number') {
+          // Unix timestamp - convert to readable format
+          const date = new Date(timestampStr * 1000);
+          timestampStr = date.toLocaleString('en-US', { 
+            month: '2-digit', 
+            day: '2-digit', 
+            hour: '2-digit', 
+            minute: '2-digit', 
+            hour12: false 
+          });
+        }
+        title.textContent = `${timestampStr}\nRequests: ${requestValue.toFixed(2)}/min`;
+        bar.appendChild(title);
+        
         g.appendChild(bar);
+        
+        // Add value label on top of bar (only if bar is tall enough and value > 0)
+        if (barHeight > 15 && requestValue > 0) {
+          const valueLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          valueLabel.setAttribute('x', x + barWidth / 2);
+          valueLabel.setAttribute('y', y - 5);
+          valueLabel.setAttribute('text-anchor', 'middle');
+          valueLabel.setAttribute('fill', 'var(--muted)');
+          valueLabel.setAttribute('font-size', '10');
+          valueLabel.setAttribute('font-weight', 'bold');
+          valueLabel.textContent = requestValue.toFixed(1);
+          g.appendChild(valueLabel);
+        }
+      }
+      
+      // X-axis time labels (show every nth label to avoid crowding)
+      const numXLabels = Math.min(10, points); // Show at most 10 labels
+      const labelStep = Math.max(1, Math.floor(points / numXLabels));
+      
+      for (let i = 0; i < points; i += labelStep) {
+        const x = (i * chartWidth / points) + (barSpacing / 2) + (barWidth / 2);
+        
+        // Convert timestamp to time string
+        const timestamp = data.timestamps[i];
+        let timeLabel = '';
+        
+        if (typeof timestamp === 'number') {
+          // Unix timestamp - convert to HH:MM format
+          const date = new Date(timestamp * 1000);
+          timeLabel = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+        } else if (typeof timestamp === 'string') {
+          // String timestamp - extract time (e.g., "2024-01-01 12:30:00" -> "12:30")
+          const timeMatch = timestamp.match(/(\d{2}:\d{2})/);
+          timeLabel = timeMatch ? timeMatch[1] : timestamp.split(' ')[1]?.substring(0, 5) || '';
+        }
+        
+        if (timeLabel) {
+          const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          label.setAttribute('x', x);
+          label.setAttribute('y', chartHeight + 20);
+          label.setAttribute('text-anchor', 'middle');
+          label.setAttribute('fill', 'var(--muted)');
+          label.setAttribute('font-size', '10');
+          label.textContent = timeLabel;
+          g.appendChild(label);
+        }
       }
       
       // Legend
