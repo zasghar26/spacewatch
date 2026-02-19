@@ -804,8 +804,43 @@
       const chartHeight = height - margin.top - margin.bottom;
       
       // Constants for chart rendering
-      const CHART_SCALE_FACTOR = 0.9; // Usable height ratio (leave 10% padding at top)
-      const DECIMAL_PRECISION = 1; // Number of decimal places for display
+      const Y_AXIS_USABLE_HEIGHT_RATIO = 0.9; // Leave 10% padding at top for value labels
+      const DECIMAL_PRECISION = 1; // Number of decimal places for fractional values
+      const TIME_FORMAT_LENGTH = 5; // Length of 'HH:MM' format
+      
+      // Helper function to format chart values (whole vs decimal)
+      const formatChartValue = (value) => {
+        return (value % 1 === 0) ? value.toFixed(0) : value.toFixed(DECIMAL_PRECISION);
+      };
+      
+      // Helper function to format timestamps consistently
+      const formatTimestamp = (timestamp, formatType = 'full') => {
+        if (typeof timestamp === 'number') {
+          const date = new Date(timestamp * 1000);
+          if (formatType === 'time') {
+            return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+          } else {
+            return date.toLocaleString('en-US', { 
+              month: '2-digit', 
+              day: '2-digit', 
+              hour: '2-digit', 
+              minute: '2-digit', 
+              hour12: false 
+            });
+          }
+        } else if (typeof timestamp === 'string') {
+          const timeMatch = timestamp.match(/(\d{2}:\d{2})/);
+          if (timeMatch) {
+            return timeMatch[1];
+          } else {
+            const parts = timestamp.split(' ');
+            if (parts.length > 1 && parts[1].length >= TIME_FORMAT_LENGTH) {
+              return parts[1].substring(0, TIME_FORMAT_LENGTH);
+            }
+          }
+        }
+        return '';
+      };
       
       // Find max values for scaling
       const maxReq = Math.max(...data.requests_per_min, 1);
@@ -852,7 +887,7 @@
       const niceMax = getNiceNumber(maxReq);
       for (let i = 0; i <= numYTicks; i++) {
         const value = (niceMax / numYTicks) * i;
-        const y = chartHeight - (chartHeight * CHART_SCALE_FACTOR * i / numYTicks);
+        const y = chartHeight - (chartHeight * Y_AXIS_USABLE_HEIGHT_RATIO * i / numYTicks);
         
         // Tick mark
         const tick = document.createElementNS('http://www.w3.org/2000/svg', 'line');
@@ -864,15 +899,14 @@
         tick.setAttribute('stroke-width', 1);
         g.appendChild(tick);
         
-        // Label - display whole numbers without unnecessary decimals
+        // Label - use helper function for consistent formatting
         const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
         label.setAttribute('x', -10);
         label.setAttribute('y', y + 4);
         label.setAttribute('text-anchor', 'end');
         label.setAttribute('fill', 'var(--muted)');
         label.setAttribute('font-size', '11');
-        // Use toFixed(0) for whole numbers, toFixed(1) for fractional values
-        label.textContent = (value % 1 === 0) ? value.toFixed(0) : value.toFixed(DECIMAL_PRECISION);
+        label.textContent = formatChartValue(value);
         g.appendChild(label);
       }
       
@@ -886,7 +920,7 @@
         const x = (i * chartWidth / points) + (barSpacing / 2);
         const requestValue = data.requests_per_min[i];
         // Scale bars against niceMax to align with Y-axis scale
-        const barHeight = (requestValue / niceMax * chartHeight * CHART_SCALE_FACTOR);
+        const barHeight = (requestValue / niceMax * chartHeight * Y_AXIS_USABLE_HEIGHT_RATIO);
         const y = chartHeight - barHeight;
         
         const bar = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
@@ -899,18 +933,7 @@
         
         // Add tooltip with timestamp and value
         const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
-        let timestampStr = data.timestamps[i];
-        if (typeof timestampStr === 'number') {
-          // Unix timestamp - convert to readable format
-          const date = new Date(timestampStr * 1000);
-          timestampStr = date.toLocaleString('en-US', { 
-            month: '2-digit', 
-            day: '2-digit', 
-            hour: '2-digit', 
-            minute: '2-digit', 
-            hour12: false 
-          });
-        }
+        const timestampStr = formatTimestamp(data.timestamps[i], 'full');
         // Request counts are discrete, display as whole numbers
         title.textContent = `${timestampStr}\nRequests: ${Math.round(requestValue)}/min`;
         bar.appendChild(title);
@@ -939,27 +962,8 @@
       for (let i = 0; i < points; i += labelStep) {
         const x = (i * chartWidth / points) + (barSpacing / 2) + (barWidth / 2);
         
-        // Convert timestamp to time string
-        const timestamp = data.timestamps[i];
-        let timeLabel = '';
-        
-        if (typeof timestamp === 'number') {
-          // Unix timestamp - convert to HH:MM format
-          const date = new Date(timestamp * 1000);
-          timeLabel = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
-        } else if (typeof timestamp === 'string') {
-          // String timestamp - extract time (e.g., "2024-01-01 12:30:00" -> "12:30")
-          const timeMatch = timestamp.match(/(\d{2}:\d{2})/);
-          if (timeMatch) {
-            timeLabel = timeMatch[1];
-          } else {
-            // Fallback: try to split and extract safely
-            const parts = timestamp.split(' ');
-            if (parts.length > 1 && parts[1].length >= 5) {
-              timeLabel = parts[1].substring(0, 5);
-            }
-          }
-        }
+        // Use helper function for consistent timestamp formatting
+        const timeLabel = formatTimestamp(data.timestamps[i], 'time');
         
         if (timeLabel) {
           const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
