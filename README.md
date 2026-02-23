@@ -38,7 +38,7 @@ python setup.py
 The wizard will prompt you for:
 - **DO_AGENT_URL** - OpenAI-compatible chat completions endpoint (required)
 - **DO_AGENT_KEY** - API key for the AI agent (required)
-- **APP_API_KEY** - API key to protect endpoints (optional but recommended)
+- **APP_API_KEY** - API key to protect admin endpoints (optional, recommended for production)
 - **SPACES_REGION** - Default DigitalOcean Spaces region (optional, default: sgp1)
 - **SPACES_ENDPOINT** - Default Spaces endpoint URL (optional, auto-generated from region)
 
@@ -57,7 +57,7 @@ Edit `.env` and set your actual values:
 DO_AGENT_URL=https://your-agent-host/v1/chat/completions
 DO_AGENT_KEY=your_actual_agent_api_key
 
-# App Security (optional but recommended)
+# App Security (optional, for admin endpoints)
 APP_API_KEY=your_api_key_here
 
 # Default Region (optional)
@@ -67,7 +67,25 @@ SPACES_ENDPOINT=https://sgp1.digitaloceanspaces.com
 
 **Note:** DigitalOcean Spaces credentials are now provided per-request, not globally configured. See the Multi-Tenant Usage section below for details.
 
-### 3. Run the Application
+### 3. Authentication & Security
+
+SpaceWatch has two types of endpoints:
+
+**User Endpoints** - These endpoints allow users to access their own Spaces buckets using their Spaces credentials. No API key required:
+- `/chat` - AI-driven chat interface
+- `/tools/*` - Bucket and object management tools
+- `/metrics/*` - Metrics and monitoring for user buckets
+- `/validate-credentials` - Credential validation
+
+**Admin Endpoints** - These endpoints provide system-wide monitoring and require the `X-API-Key` header (set via `APP_API_KEY` environment variable):
+- `/admin/api/mission-control` - System health dashboard
+- `/admin/api/timeseries` - System-wide timeseries data
+- `/admin/api/events` - System events log
+- `/metrics/operations` - Storage operation metrics
+- `/logs/operations` - Operation logs
+- `/stats` - System statistics
+
+### 4. Run the Application
 
 ```bash
 uvicorn main:app --host 0.0.0.0 --port 8000
@@ -88,7 +106,6 @@ SpaceWatch now supports multi-tenant usage where each request provides its own D
 ```bash
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your_api_key" \
   -d '{
     "message": "Show me my largest files",
     "spaces_key": "your_spaces_access_key",
@@ -106,14 +123,12 @@ All tool endpoints now accept credentials via headers:
 
 ```bash
 curl -X GET "http://localhost:8000/tools/buckets" \
-  -H "X-API-Key: your_api_key" \
   -H "X-Spaces-Key: your_spaces_access_key" \
   -H "X-Spaces-Secret: your_spaces_secret_key"
 ```
 
 ```bash
 curl -X GET "http://localhost:8000/tools/list-all?bucket=my-bucket" \
-  -H "X-API-Key: your_api_key" \
   -H "X-Spaces-Key: your_spaces_access_key" \
   -H "X-Spaces-Secret: your_spaces_secret_key" \
   -H "X-Log-Bucket: my-access-logs" \
@@ -145,7 +160,7 @@ The application automatically loads environment variables from a `.env` file in 
 
 ### Optional Variables
 
-- `APP_API_KEY` - API key to protect endpoints (recommended)
+- `APP_API_KEY` - API key to protect admin endpoints (recommended for production)
 - `SPACES_REGION` - Default DigitalOcean Spaces region (default: "sgp1")
 - `SPACES_ENDPOINT` - Default Spaces endpoint URL
 

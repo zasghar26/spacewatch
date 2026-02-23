@@ -53,7 +53,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, SecretStr
-from collections import Counter
+from collections import Counter, deque
 
 import matplotlib
 matplotlib.use("Agg")
@@ -265,6 +265,16 @@ async def track_storage_operations(request: Request, call_next):
             status_code=response.status_code,
             bucket=bucket,
             bytes_transferred=bytes_transferred
+        )
+        
+        # Record Mission Control metrics
+        record_mission_control_request(
+            timestamp=start_time,
+            method=request.method,
+            path=path,
+            status_code=response.status_code,
+            duration_ms=duration_ms,
+            client_ip=request.client.host if request.client else "unknown"
         )
         
         # Add custom headers with metrics (like S3 request metrics)
@@ -479,6 +489,408 @@ def get_storage_metrics() -> Dict[str, Any]:
         "avg_latency_ms": round(sum(all_latencies) / len(all_latencies), 2) if all_latencies else 0,
         "operation_breakdown": operation_breakdown,
         "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+# ============================================================
+# MISSION CONTROL METRICS (Admin Dashboard)
+# ============================================================
+@dataclass
+class RequestSample:
+    """Individual request sample for Mission Control"""
+    timestamp: float
+    method: str
+    route: str  # normalized route
+    status_code: int
+    duration_ms: float
+    client_ip: str
+
+@dataclass
+class MinuteBucket:
+    """Per-minute aggregated metrics"""
+    requests: int = 0
+    errors_4xx: int = 0
+    errors_5xx: int = 0
+    duration_samples_ms: Any = None  # deque
+    per_route_counts: Any = None  # Counter
+    per_route_duration_samples: Any = None  # dict of route -> deque
+    
+    def __post_init__(self):
+        if self.duration_samples_ms is None:
+            self.duration_samples_ms = deque(maxlen=2000)
+        if self.per_route_counts is None:
+            self.per_route_counts = Counter()
+        if self.per_route_duration_samples is None:
+            self.per_route_duration_samples = {}
+
+@dataclass
+class MissionControlEvent:
+    """Event for health status changes"""
+    ts: float
+    severity: str  # info, warning, high, disaster
+    title: str
+    details: str
+    metric_before: Optional[float] = None
+    metric_after: Optional[float] = None
+
+# Metrics storage for Mission Control
+REQUEST_SAMPLES = deque(maxlen=20000)
+MINUTE_BUCKETS: Dict[int, MinuteBucket] = {}  # keyed by minute_ts (epoch // 60 * 60)
+EVENTS = deque(maxlen=200)
+
+# Snapshot for detecting changes
+_LAST_SNAPSHOT = {
+    "timestamp": time.time(),
+    "req_per_min_5m": 0.0,
+    "p95_latency_5m": 0.0,
+    "error_5xx_rate_5m": 0.0,
+    "req_per_min_60m": 0.0,
+}
+
+# Server start time for uptime
+SERVER_START_TIME = time.time()
+
+def normalize_route(path: str) -> str:
+    """Normalize route for grouping (remove IDs, etc.)"""
+    # Replace numeric IDs and hashes with placeholders
+    path = re.sub(r'/\d+', '/{id}', path)
+    path = re.sub(r'/[a-f0-9]{8,}', '/{hash}', path)
+    # Normalize admin routes
+    if path.startswith('/admin/api/'):
+        return path
+    return path
+
+def record_mission_control_request(
+    timestamp: float,
+    method: str,
+    path: str,
+    status_code: int,
+    duration_ms: float,
+    client_ip: str
+):
+    """Record request for Mission Control monitoring"""
+    # Skip admin routes from monitoring themselves
+    if path.startswith('/admin/'):
+        return
+    
+    route = normalize_route(path)
+    
+    # Add to request samples
+    sample = RequestSample(
+        timestamp=timestamp,
+        method=method,
+        route=route,
+        status_code=status_code,
+        duration_ms=duration_ms,
+        client_ip=client_ip
+    )
+    REQUEST_SAMPLES.append(sample)
+    
+    # Add to minute bucket
+    minute_ts = int(timestamp // 60 * 60)
+    if minute_ts not in MINUTE_BUCKETS:
+        MINUTE_BUCKETS[minute_ts] = MinuteBucket()
+    
+    bucket = MINUTE_BUCKETS[minute_ts]
+    bucket.requests += 1
+    if 400 <= status_code < 500:
+        bucket.errors_4xx += 1
+    elif status_code >= 500:
+        bucket.errors_5xx += 1
+    
+    bucket.duration_samples_ms.append(duration_ms)
+    bucket.per_route_counts[route] += 1
+    
+    if route not in bucket.per_route_duration_samples:
+        bucket.per_route_duration_samples[route] = deque(maxlen=300)
+    bucket.per_route_duration_samples[route].append(duration_ms)
+    
+    # Prune old buckets (keep last 24h)
+    prune_old_minute_buckets(timestamp)
+
+def prune_old_minute_buckets(current_timestamp: float):
+    """Remove buckets older than 24 hours"""
+    cutoff_ts = int((current_timestamp - 86400) // 60 * 60)  # 24h ago
+    old_keys = [k for k in MINUTE_BUCKETS.keys() if k < cutoff_ts]
+    for k in old_keys:
+        del MINUTE_BUCKETS[k]
+
+def get_minute_buckets_in_window(window_minutes: int) -> List[MinuteBucket]:
+    """Get minute buckets for the specified time window"""
+    now = time.time()
+    cutoff_ts = int((now - window_minutes * 60) // 60 * 60)
+    return [bucket for ts, bucket in MINUTE_BUCKETS.items() if ts >= cutoff_ts]
+
+def compute_req_per_min(window_minutes: int) -> float:
+    """Compute requests per minute for a time window"""
+    buckets = get_minute_buckets_in_window(window_minutes)
+    if not buckets:
+        return 0.0
+    total_requests = sum(b.requests for b in buckets)
+    return total_requests / window_minutes if window_minutes > 0 else 0.0
+
+def compute_error_rate(window_minutes: int, error_type: str = "5xx") -> float:
+    """Compute error rate (percentage) for a time window"""
+    buckets = get_minute_buckets_in_window(window_minutes)
+    if not buckets:
+        return 0.0
+    
+    total_requests = sum(b.requests for b in buckets)
+    if total_requests == 0:
+        return 0.0
+    
+    if error_type == "4xx":
+        total_errors = sum(b.errors_4xx for b in buckets)
+    else:  # 5xx
+        total_errors = sum(b.errors_5xx for b in buckets)
+    
+    return (total_errors / total_requests) * 100
+
+def compute_latency_percentile(window_minutes: int, percentile: int = 95) -> float:
+    """Compute latency percentile from bounded samples in time window"""
+    buckets = get_minute_buckets_in_window(window_minutes)
+    if not buckets:
+        return 0.0
+    
+    all_samples = []
+    for bucket in buckets:
+        all_samples.extend(bucket.duration_samples_ms)
+    
+    if not all_samples:
+        return 0.0
+    
+    sorted_samples = sorted(all_samples)
+    idx = int(len(sorted_samples) * percentile / 100)
+    if idx >= len(sorted_samples):
+        idx = len(sorted_samples) - 1
+    return sorted_samples[idx]
+
+def compute_avg_latency(window_minutes: int) -> float:
+    """Compute average latency in time window"""
+    buckets = get_minute_buckets_in_window(window_minutes)
+    if not buckets:
+        return 0.0
+    
+    all_samples = []
+    for bucket in buckets:
+        all_samples.extend(bucket.duration_samples_ms)
+    
+    if not all_samples:
+        return 0.0
+    
+    return sum(all_samples) / len(all_samples)
+
+def get_top_routes_by_volume(window_minutes: int, limit: int = 10) -> List[Dict[str, Any]]:
+    """Get top routes by request volume"""
+    buckets = get_minute_buckets_in_window(window_minutes)
+    if not buckets:
+        return []
+    
+    route_counts = Counter()
+    for bucket in buckets:
+        route_counts.update(bucket.per_route_counts)
+    
+    top_routes = []
+    for route, count in route_counts.most_common(limit):
+        top_routes.append({
+            "route": route,
+            "count": count,
+            "req_per_min": count / window_minutes if window_minutes > 0 else 0
+        })
+    
+    return top_routes
+
+def get_slowest_routes(window_minutes: int, limit: int = 10) -> List[Dict[str, Any]]:
+    """Get slowest routes by p95 latency"""
+    buckets = get_minute_buckets_in_window(window_minutes)
+    if not buckets:
+        return []
+    
+    route_samples = defaultdict(list)
+    route_counts = Counter()
+    
+    for bucket in buckets:
+        route_counts.update(bucket.per_route_counts)
+        for route, samples in bucket.per_route_duration_samples.items():
+            route_samples[route].extend(samples)
+    
+    route_p95 = []
+    for route, samples in route_samples.items():
+        if samples:
+            sorted_samples = sorted(samples)
+            idx = int(len(sorted_samples) * 95 / 100)
+            if idx >= len(sorted_samples):
+                idx = len(sorted_samples) - 1
+            p95 = sorted_samples[idx]
+            route_p95.append({
+                "route": route,
+                "p95_latency_ms": round(p95, 2),
+                "count": route_counts[route]
+            })
+    
+    # Sort by p95 descending
+    route_p95.sort(key=lambda x: x["p95_latency_ms"], reverse=True)
+    return route_p95[:limit]
+
+def get_error_prone_routes(window_minutes: int, limit: int = 10) -> List[Dict[str, Any]]:
+    """Get routes with highest 5xx error rate"""
+    # Get samples from the window
+    now = time.time()
+    cutoff = now - (window_minutes * 60)
+    
+    route_requests = Counter()
+    route_5xx_errors = Counter()
+    
+    for sample in REQUEST_SAMPLES:
+        if sample.timestamp >= cutoff:
+            route_requests[sample.route] += 1
+            if sample.status_code >= 500:
+                route_5xx_errors[sample.route] += 1
+    
+    route_error_rates = []
+    for route in route_requests:
+        total = route_requests[route]
+        errors = route_5xx_errors[route]
+        if total > 0:
+            error_rate = (errors / total) * 100
+            if errors > 0:  # Only include routes with actual errors
+                route_error_rates.append({
+                    "route": route,
+                    "error_5xx_count": errors,
+                    "total_requests": total,
+                    "error_5xx_rate": round(error_rate, 2)
+                })
+    
+    # Sort by error rate descending
+    route_error_rates.sort(key=lambda x: x["error_5xx_rate"], reverse=True)
+    return route_error_rates[:limit]
+
+def estimate_unique_sessions(window_minutes: int) -> int:
+    """Estimate unique sessions from IPs or session memory"""
+    # Try to use MEMORY_BY_KEY for session tracking
+    now = time.time()
+    cutoff = now - (window_minutes * 60)
+    
+    active_keys = set()
+    for key, state in MEMORY_BY_KEY.items():
+        if state.last_updated_ts >= cutoff:
+            active_keys.add(key)
+    
+    if active_keys:
+        return len(active_keys)
+    
+    # Fallback: count unique IPs from REQUEST_SAMPLES
+    unique_ips = set()
+    for sample in REQUEST_SAMPLES:
+        if sample.timestamp >= cutoff:
+            unique_ips.add(sample.client_ip)
+    
+    return len(unique_ips)
+
+def detect_health_events():
+    """Detect health status changes and add events"""
+    global _LAST_SNAPSHOT
+    
+    now = time.time()
+    uptime = now - SERVER_START_TIME
+    
+    # Only check after 2 minutes of uptime
+    if uptime < 120:
+        return
+    
+    # Get current metrics
+    current_req_per_min_5m = compute_req_per_min(5)
+    current_p95_latency_5m = compute_latency_percentile(5, 95)
+    current_5xx_rate_5m = compute_error_rate(5, "5xx")
+    current_req_per_min_60m = compute_req_per_min(60)
+    
+    # Get previous snapshot
+    prev_req_per_min_5m = _LAST_SNAPSHOT.get("req_per_min_5m", 0)
+    prev_p95_latency_5m = _LAST_SNAPSHOT.get("p95_latency_5m", 0)
+    prev_5xx_rate_5m = _LAST_SNAPSHOT.get("error_5xx_rate_5m", 0)
+    prev_req_per_min_60m = _LAST_SNAPSHOT.get("req_per_min_60m", 0)
+    
+    # Check latency jump
+    if prev_p95_latency_5m > 0:
+        latency_ratio = current_p95_latency_5m / prev_p95_latency_5m
+        latency_diff = current_p95_latency_5m - prev_p95_latency_5m
+        
+        if latency_ratio > 2.0 and latency_diff > 200:
+            severity = "high" if latency_ratio > 3.0 else "warning"
+            event = MissionControlEvent(
+                ts=now,
+                severity=severity,
+                title=f"Latency spike detected",
+                details=f"P95 latency increased {latency_ratio:.1f}x ({prev_p95_latency_5m:.0f}ms → {current_p95_latency_5m:.0f}ms)",
+                metric_before=prev_p95_latency_5m,
+                metric_after=current_p95_latency_5m
+            )
+            EVENTS.append(event)
+    
+    # Check 5xx rate thresholds
+    if current_5xx_rate_5m >= 5.0 and prev_5xx_rate_5m < 5.0:
+        event = MissionControlEvent(
+            ts=now,
+            severity="disaster",
+            title="Critical error rate",
+            details=f"5xx error rate at {current_5xx_rate_5m:.1f}%",
+            metric_before=prev_5xx_rate_5m,
+            metric_after=current_5xx_rate_5m
+        )
+        EVENTS.append(event)
+    elif current_5xx_rate_5m >= 2.0 and prev_5xx_rate_5m < 2.0:
+        event = MissionControlEvent(
+            ts=now,
+            severity="high",
+            title="High error rate",
+            details=f"5xx error rate at {current_5xx_rate_5m:.1f}%",
+            metric_before=prev_5xx_rate_5m,
+            metric_after=current_5xx_rate_5m
+        )
+        EVENTS.append(event)
+    elif current_5xx_rate_5m >= 1.0 and prev_5xx_rate_5m < 1.0:
+        event = MissionControlEvent(
+            ts=now,
+            severity="warning",
+            title="Elevated error rate",
+            details=f"5xx error rate at {current_5xx_rate_5m:.1f}%",
+            metric_before=prev_5xx_rate_5m,
+            metric_after=current_5xx_rate_5m
+        )
+        EVENTS.append(event)
+    
+    # Check traffic drop
+    if uptime > 120 and prev_req_per_min_5m > 1.0 and current_req_per_min_5m < 0.1:
+        event = MissionControlEvent(
+            ts=now,
+            severity="disaster",
+            title="Traffic dropped to zero",
+            details=f"Request rate dropped from {prev_req_per_min_5m:.1f} to {current_req_per_min_5m:.1f} req/min",
+            metric_before=prev_req_per_min_5m,
+            metric_after=current_req_per_min_5m
+        )
+        EVENTS.append(event)
+    
+    # Check traffic spike
+    baseline_60m = prev_req_per_min_60m if prev_req_per_min_60m > 0 else current_req_per_min_60m
+    if baseline_60m > 0 and current_req_per_min_5m > baseline_60m * 2:
+        severity = "info" if current_req_per_min_5m < baseline_60m * 3 else "warning"
+        event = MissionControlEvent(
+            ts=now,
+            severity=severity,
+            title="Traffic spike detected",
+            details=f"Request rate at {current_req_per_min_5m:.1f} req/min (baseline: {baseline_60m:.1f})",
+            metric_before=baseline_60m,
+            metric_after=current_req_per_min_5m
+        )
+        EVENTS.append(event)
+    
+    # Update snapshot
+    _LAST_SNAPSHOT = {
+        "timestamp": now,
+        "req_per_min_5m": current_req_per_min_5m,
+        "p95_latency_5m": current_p95_latency_5m,
+        "error_5xx_rate_5m": current_5xx_rate_5m,
+        "req_per_min_60m": current_req_per_min_60m,
     }
 
 # ============================================================
@@ -1075,7 +1487,6 @@ def http_metrics_sources(
     Frontend bucket discovery endpoint.
     Returns list of source buckets discovered from stored snapshot objects.
     """
-    require_api_key(x_api_key)
     if request:
         rate_limit(client_ip(request))
     
@@ -1106,7 +1517,6 @@ def http_metrics_series(
     """
     Frontend timeseries endpoint for a specific bucket/prefix.
     """
-    require_api_key(x_api_key)
     if request:
         rate_limit(client_ip(request))
     
@@ -1146,7 +1556,6 @@ def http_metrics_aggregate_series(
     Aggregates totals across all buckets at each timestamp from stored snapshot records.
     Returns points with summed source_bytes/logs_bytes/source_objects/logs_files and request stats if present.
     """
-    require_api_key(x_api_key)
     if request:
         rate_limit(client_ip(request))
     
@@ -1211,7 +1620,6 @@ def tool_buckets(
     x_api_key: Optional[str] = Header(None),
     request: Request = None,
 ):
-    require_api_key(x_api_key)
     if request:
         rate_limit(client_ip(request))
     STATS["tool_requests"] += 1
@@ -1243,7 +1651,6 @@ def tool_storage_summary(
     x_api_key: Optional[str] = Header(None),
     request: Request = None,
 ):
-    require_api_key(x_api_key)
     if request:
         rate_limit(client_ip(request))
     STATS["tool_requests"] += 1
@@ -1265,7 +1672,6 @@ def tool_list_all(
     x_api_key: Optional[str] = Header(None),
     request: Request = None,
 ):
-    require_api_key(x_api_key)
     if request:
         rate_limit(client_ip(request))
     STATS["tool_requests"] += 1
@@ -1295,7 +1701,6 @@ def tool_top_largest(
     x_api_key: Optional[str] = Header(None),
     request: Request = None,
 ):
-    require_api_key(x_api_key)
     if request:
         rate_limit(client_ip(request))
     STATS["tool_requests"] += 1
@@ -1829,7 +2234,6 @@ Available tools and schemas:
 # ============================================================
 @app.post("/chat")
 def chat(req: ChatRequest, request: Request, x_api_key: Optional[str] = Header(None), x_session_id: Optional[str] = Header(None)):
-    require_api_key(x_api_key)
     rate_limit(client_ip(request))
     STATS["chat_requests"] += 1
 
@@ -2105,7 +2509,6 @@ def metrics_snapshot(
     x_api_key: Optional[str] = Header(None),
     request: Request = None,
 ):
-    require_api_key(x_api_key)
     if request:
         rate_limit(client_ip(request))
     
@@ -2135,7 +2538,6 @@ def get_top_ips(
     """
     Return top IPs data as JSON for client-side Chart.js rendering.
     """
-    require_api_key(x_api_key)
     if request:
         rate_limit(client_ip(request))
     
@@ -2185,7 +2587,6 @@ def plot_top_ips_png(
     x_api_key: Optional[str] = Header(None),
     request: Request = None,
 ):
-    require_api_key(x_api_key)
     if request:
         rate_limit(client_ip(request))
     
@@ -2268,7 +2669,6 @@ def validate_credentials(
     Validate Spaces credentials by attempting to list buckets.
     Returns success if credentials are valid.
     """
-    require_api_key(x_api_key)
     
     try:
         s3_client = create_s3_client(spaces_key, spaces_secret, region, endpoint)
@@ -2302,7 +2702,6 @@ def trigger_snapshot_all(
     Trigger metrics snapshots for all discovered buckets.
     This is called automatically after credential validation.
     """
-    require_api_key(x_api_key)
     
     if not log_bucket:
         raise HTTPException(status_code=400, detail="X-Log-Bucket header required")
@@ -2359,3 +2758,190 @@ def trigger_snapshot_all(
         "results": results,
         "errors": errors
     }
+
+
+# ============================================================
+# MISSION CONTROL ADMIN ENDPOINTS
+# ============================================================
+
+@app.get("/admin")
+def admin_dashboard():
+    """Serve the Mission Control admin dashboard"""
+    if os.path.exists("static/admin.html"):
+        return FileResponse("static/admin.html")
+    return {"error": "Admin dashboard not found"}
+
+
+@app.get("/admin/api/mission-control")
+def mission_control_overview(
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key")
+):
+    """
+    GET /admin/api/mission-control
+    Return Mission Control overview with status, metrics, top endpoints, and events
+    """
+    require_api_key(x_api_key)
+    
+    # Detect health events
+    detect_health_events()
+    
+    # Calculate current metrics
+    req_per_min_1m = compute_req_per_min(1)
+    req_per_min_5m = compute_req_per_min(5)
+    p95_latency_5m = compute_latency_percentile(5, 95)
+    p50_latency_5m = compute_latency_percentile(5, 50)
+    error_5xx_rate_5m = compute_error_rate(5, "5xx")
+    error_4xx_rate_5m = compute_error_rate(5, "4xx")
+    
+    # Determine health status
+    status = "healthy"
+    if error_5xx_rate_5m >= 5.0 or p95_latency_5m > 10000:
+        status = "down"
+    elif error_5xx_rate_5m >= 1.0 or p95_latency_5m > 5000:
+        status = "degraded"
+    
+    # Get top endpoints
+    top_by_volume = get_top_routes_by_volume(60, 10)
+    slowest = get_slowest_routes(60, 10)
+    error_prone = get_error_prone_routes(60, 10)
+    
+    # Get unique sessions
+    unique_sessions = estimate_unique_sessions(30)
+    
+    # Get last 20 events
+    recent_events = []
+    for event in list(EVENTS)[-20:]:
+        recent_events.append({
+            "ts": event.ts,
+            "severity": event.severity,
+            "title": event.title,
+            "details": event.details,
+            "metric_before": event.metric_before,
+            "metric_after": event.metric_after
+        })
+    
+    return {
+        "status": status,
+        "uptime_seconds": int(time.time() - SERVER_START_TIME),
+        "now": {
+            "req_per_min_1m": round(req_per_min_1m, 2),
+            "req_per_min_5m": round(req_per_min_5m, 2),
+            "p50_latency_5m": round(p50_latency_5m, 2),
+            "p95_latency_5m": round(p95_latency_5m, 2),
+            "error_5xx_rate_5m": round(error_5xx_rate_5m, 2),
+            "error_4xx_rate_5m": round(error_4xx_rate_5m, 2)
+        },
+        "users": {
+            "unique_sessions_30m": unique_sessions
+        },
+        "top_endpoints": {
+            "by_volume": top_by_volume,
+            "slowest": slowest,
+            "error_prone": error_prone
+        },
+        "events": recent_events
+    }
+
+
+@app.get("/admin/api/timeseries")
+def mission_control_timeseries(
+    window: str = "60m",
+    resolution: str = "1m",
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key")
+):
+    """
+    GET /admin/api/timeseries?window=60m&resolution=1m
+    Return time series data for charting
+    """
+    require_api_key(x_api_key)
+    
+    # Parse window (e.g., "60m")
+    window_match = re.match(r'(\d+)m', window)
+    if not window_match:
+        raise HTTPException(status_code=400, detail="Invalid window format (expected: Nm)")
+    window_minutes = int(window_match.group(1))
+    
+    # Parse resolution (e.g., "1m")
+    resolution_match = re.match(r'(\d+)m', resolution)
+    if not resolution_match:
+        raise HTTPException(status_code=400, detail="Invalid resolution format (expected: Nm)")
+    resolution_minutes = int(resolution_match.group(1))
+    
+    # Get buckets in window
+    now = time.time()
+    start_ts = int((now - window_minutes * 60) // 60 * 60)
+    
+    # Build time series
+    timestamps = []
+    requests_per_min = []
+    errors_5xx_per_min = []
+    p95_latency_ms = []
+    
+    for offset in range(0, window_minutes, resolution_minutes):
+        minute_ts = start_ts + (offset * 60)
+        timestamps.append(minute_ts)
+        
+        # Aggregate buckets for this resolution window
+        window_buckets = []
+        for i in range(resolution_minutes):
+            bucket_ts = minute_ts + (i * 60)
+            if bucket_ts in MINUTE_BUCKETS:
+                window_buckets.append(MINUTE_BUCKETS[bucket_ts])
+        
+        if window_buckets:
+            total_requests = sum(b.requests for b in window_buckets)
+            total_5xx = sum(b.errors_5xx for b in window_buckets)
+            
+            # Collect all duration samples
+            all_durations = []
+            for bucket in window_buckets:
+                all_durations.extend(bucket.duration_samples_ms)
+            
+            # Calculate p95
+            p95 = 0.0
+            if all_durations:
+                sorted_durations = sorted(all_durations)
+                idx = int(len(sorted_durations) * 95 / 100)
+                if idx >= len(sorted_durations):
+                    idx = len(sorted_durations) - 1
+                p95 = sorted_durations[idx]
+            
+            requests_per_min.append(total_requests / resolution_minutes if resolution_minutes > 0 else 0)
+            errors_5xx_per_min.append(total_5xx / resolution_minutes if resolution_minutes > 0 else 0)
+            p95_latency_ms.append(round(p95, 2))
+        else:
+            requests_per_min.append(0)
+            errors_5xx_per_min.append(0)
+            p95_latency_ms.append(0)
+    
+    return {
+        "timestamps": timestamps,
+        "requests_per_min": requests_per_min,
+        "errors_5xx_per_min": errors_5xx_per_min,
+        "p95_latency_ms": p95_latency_ms
+    }
+
+
+@app.get("/admin/api/events")
+def mission_control_events(
+    limit: int = 50,
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key")
+):
+    """
+    GET /admin/api/events?limit=50
+    Return recent events
+    """
+    require_api_key(x_api_key)
+    
+    events_list = []
+    for event in list(EVENTS)[-limit:]:
+        events_list.append({
+            "ts": event.ts,
+            "severity": event.severity,
+            "title": event.title,
+            "details": event.details,
+            "metric_before": event.metric_before,
+            "metric_after": event.metric_after
+        })
+    
+    return {"events": events_list}
